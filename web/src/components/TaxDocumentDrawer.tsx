@@ -17,7 +17,7 @@ import CloseRounded from '@mui/icons-material/CloseRounded';
 import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded';
 import DownloadRounded from '@mui/icons-material/DownloadRounded';
 import { patch, put, req, type TaxDocumentDetail, type TaxEntity, type TxnListResponse } from '../api.js';
-import { currentMonth } from './MonthPicker.js';
+import MonthPicker, { currentMonth } from './MonthPicker.js';
 import { formatDate } from '../format.js';
 import { dataTextSx } from '../theme.js';
 import { DOCUMENT_TYPE_LABEL } from '../taxDocumentLabels.js';
@@ -53,6 +53,7 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<TxnListResponse['rows']>([]);
   const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
   const requestIdRef = useRef(0);
 
   const load = async (id: number) => {
@@ -74,7 +75,7 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
 
   useEffect(() => {
     if (docId != null) void load(docId);
-    else { setDetail(null); setSearchResults([]); setSearchQuery(''); }
+    else { setDetail(null); setSearchResults([]); setSearchQuery(''); setSearched(false); }
   }, [docId]);
 
   const taxEntityName = taxEntities.find((e) => e.id === detail?.tax_entity_id)?.display_name ?? '—';
@@ -100,10 +101,11 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
   const runSearch = async () => {
     setSearching(true);
     try {
-      const q = new URLSearchParams({ month: searchMonth, limit: '10' });
+      const q = new URLSearchParams({ month: searchMonth, limit: '25' });
       if (searchQuery.trim()) q.set('q', searchQuery.trim());
       const result = await req<TxnListResponse>(`/api/transactions?${q}`);
       setSearchResults(result.rows);
+      setSearched(true);
     } catch (e) {
       onNotice({ message: e instanceof Error ? e.message : 'ค้นหาธุรกรรมไม่สำเร็จ', severity: 'error' });
     } finally {
@@ -221,17 +223,11 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
               </Button>
 
               <Typography variant="body2" sx={{ fontWeight: 650, mb: 1 }}>ค้นหาธุรกรรมเพื่อเพิ่ม</Typography>
-              <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-                <TextField
-                  type="month"
-                  size="small"
-                  value={searchMonth}
-                  onChange={(e) => e.target.value && setSearchMonth(e.target.value)}
-                  slotProps={{ htmlInput: { sx: dataTextSx } }}
-                />
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1 }}>
+                <MonthPicker value={searchMonth} onChange={setSearchMonth} />
                 <TextField
                   size="small"
-                  label="ค้นหา"
+                  label="ค้นหา (ชื่อรายการ)"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') void runSearch(); }}
@@ -239,17 +235,20 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
                 />
                 <Button variant="outlined" size="small" onClick={() => void runSearch()} disabled={searching} aria-busy={searching}>ค้นหา</Button>
               </Stack>
-              {searchResults.length > 0 && (
-                <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: '10px', maxHeight: 240, overflowY: 'auto' }}>
+              {searchResults.length > 0 ? (
+                <List dense sx={{ border: 1, borderColor: 'divider', borderRadius: '10px', maxHeight: 280, overflowY: 'auto' }}>
                   {searchResults.map((row) => (
                     <ListItemButton key={row.id} onClick={() => addLink(row)} disabled={links.some((l) => l.txn_id === row.id)}>
                       <ListItemText
-                        primary={row.description}
-                        secondary={`${formatDate(row.txn_date)} · ${row.direction === 'credit' ? '+' : '-'}฿${(row.amount_satang / 100).toFixed(2)}`}
+                        primary={row.description || '(ไม่มีคำอธิบายรายการ)'}
+                        secondary={`${formatDate(row.txn_date)} · ${row.account_nickname} (${row.bank_name}) · ${row.direction === 'credit' ? '+' : '-'}฿${(row.amount_satang / 100).toFixed(2)}`}
+                        slotProps={{ secondary: { sx: dataTextSx } }}
                       />
                     </ListItemButton>
                   ))}
                 </List>
+              ) : searched && (
+                <Typography variant="body2" color="text.secondary">ไม่พบธุรกรรมในเดือนและคำค้นนี้ — ลองเปลี่ยนเดือนหรือล้างคำค้น</Typography>
               )}
             </Box>
           </Stack>

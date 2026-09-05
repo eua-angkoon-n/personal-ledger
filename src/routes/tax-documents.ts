@@ -218,7 +218,7 @@ taxDocumentsRouter.post('/tax-documents/from-gmail', requireUser(async (req, res
   const b = req.body as Body;
   const emailAccountId = id(b, 'email_account_id');
   const gmailMessageId = str(b, 'gmail_message_id', 200);
-  const gmailAttachmentId = str(b, 'gmail_attachment_id', 300);
+  const gmailAttachmentId = str(b, 'gmail_attachment_id', 2000);
   const filename = str(b, 'filename', 200);
   const meta = parseTaxDocMeta(b);
 
