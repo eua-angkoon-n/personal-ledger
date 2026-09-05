@@ -37,6 +37,7 @@ import { FeedbackSnackbar, PageHeader, TableSkeleton, type Notice } from './ui.j
 const Dashboard = lazy(() => import('./pages/Dashboard.js'));
 const Transactions = lazy(() => import('./pages/Transactions.js'));
 const MonthlyPlan = lazy(() => import('./pages/MonthlyPlan.js'));
+const Installments = lazy(() => import('./pages/Installments.js'));
 
 type SettingsTab = 'banks' | 'users';
 
@@ -50,6 +51,7 @@ const NAV_ITEMS = [
 // Tabs ต้อง value ตรงกับ value ของ Tab ลูกเป๊ะ — ตัดเหลือ segment แรกของ path (ตัด query/segment ย่อยทิ้ง
 // เช่น /transactions?month=... ยังนับเป็น /transactions) ไม่ตรงกับ NAV_ITEMS/settings เลย = ไม่มี tab ไหน active
 function activeNavPath(pathname: string): string | false {
+  if (pathname.startsWith('/installments')) return '/planning';
   const top = '/' + (pathname.split('/')[1] ?? '');
   const known = [...NAV_ITEMS.map((n) => n.path), '/settings'] as string[];
   return known.includes(top) ? top : false;
@@ -281,6 +283,8 @@ export default function App() {
             <Route path="/dashboard" element={<Box component="section" aria-labelledby="dashboard-heading"><Dashboard /></Box>} />
             <Route path="/transactions" element={<Box component="section" aria-labelledby="transactions-heading"><Transactions /></Box>} />
             <Route path="/planning" element={<Box component="section" aria-labelledby="planning-heading"><MonthlyPlan /></Box>} />
+            <Route path="/installments" element={<Installments />} />
+            <Route path="/installments/:id" element={<Installments />} />
             <Route path="/accounts" element={<Box component="section" aria-labelledby="accounts-heading"><Accounts /></Box>} />
             {user.is_admin && <Route path="/settings" element={<SettingsPage userId={user.id} />} />}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

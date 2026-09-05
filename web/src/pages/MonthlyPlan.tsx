@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -47,6 +47,7 @@ import Modal from '../Modal.js';
 import Money from '../components/Money.js';
 import MonthPicker, { currentMonth, shiftMonth } from '../components/MonthPicker.js';
 import PaymentStatusChip from '../components/PaymentStatusChip.js';
+import IncomeSection from '../components/IncomeSection.js';
 import SummaryCard from '../components/SummaryCard.js';
 import { createFormFieldChangeHandler } from '../form.js';
 import { formatDate, parseBahtToSatang } from '../format.js';
@@ -433,6 +434,7 @@ export default function MonthlyPlan() {
 
       <Stack direction="row" spacing={1.5} sx={{ mt: 3, alignItems: 'center', flexWrap: 'wrap' }}>
         <MonthPicker value={month} onChange={setMonth} maxMonth={MAX_MONTH} />
+        <Button component={Link} to="/installments" variant="outlined">แผนผ่อนและยอดคงเหลือ</Button>
         {/* ระหว่างสลับเดือน `closed` ยังเป็นค่าของเดือนก่อน และถ้าโหลดพลาด (plan == null) ก็ไม่รู้สถานะ
             เลย — ปุ่มล็อกจึงต้องรอให้ plan ของเดือนนี้มาถึงก่อน ไม่งั้นกดปิด/เปิดใส่เดือนผิดได้ */}
         {plan != null && !loading && (
@@ -525,6 +527,8 @@ export default function MonthlyPlan() {
             </Box>
           )}
 
+          <IncomeSection key={month} month={month} closed={closed} items={items} onChanged={() => reload(true)} />
+
           <Box component="section" aria-labelledby="plan-items-heading">
             <Typography variant="h2" id="plan-items-heading" sx={{ fontSize: '1.25rem', mb: 1.5 }}>
               รายการของเดือนนี้
@@ -579,7 +583,7 @@ export default function MonthlyPlan() {
                           <TableCell>
                             <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                               <PaymentStatusChip state={item.payment_state} />
-                              {review && (
+                              {review && item.income_record_id == null && (
                                 <Button size="small" color="inherit" onClick={() => openReview(item, review)}>
                                   เลือกคู่
                                 </Button>
@@ -591,7 +595,7 @@ export default function MonthlyPlan() {
                               <Button
                                 size="small"
                                 startIcon={<PaidRounded />}
-                                disabled={closed || inactive}
+                                disabled={closed || inactive || item.income_record_id != null || item.installment_due_id != null}
                                 onClick={() => openPayment(item)}
                               >
                                 จ่ายแล้ว
@@ -599,7 +603,7 @@ export default function MonthlyPlan() {
                               <Button
                                 size="small"
                                 startIcon={<EditRounded />}
-                                disabled={closed}
+                                disabled={closed || item.income_record_id != null || item.installment_due_id != null}
                                 onClick={() => openEditItem(item)}
                               >
                                 แก้ไข
@@ -609,7 +613,7 @@ export default function MonthlyPlan() {
                                   size="small"
                                   color="inherit"
                                   startIcon={<ReplayRounded />}
-                                  disabled={closed}
+                                  disabled={closed || item.income_record_id != null || item.installment_due_id != null}
                                   onClick={() =>
                                     void run(
                                       () => patch(`/api/monthly-plan-items/${item.id}`, { explicit_status: 'active' }),
@@ -624,7 +628,7 @@ export default function MonthlyPlan() {
                                   size="small"
                                   color="inherit"
                                   startIcon={<SkipNextRounded />}
-                                  disabled={closed}
+                                  disabled={closed || item.income_record_id != null || item.installment_due_id != null}
                                   onClick={() =>
                                     void run(
                                       () => post(`/api/monthly-plan-items/${item.id}/skip`, {}),
@@ -635,6 +639,8 @@ export default function MonthlyPlan() {
                                   ข้าม
                                 </Button>
                               )}
+                              {item.income_record_id != null && <Typography variant="body2" color="text.secondary">จัดการในรายได้ด้านบน</Typography>}
+                              {item.installment_due_id != null && <Button component={Link} to="/installments">ดูแผนผ่อน</Button>}
                             </Stack>
                           </TableCell>
                         </TableRow>

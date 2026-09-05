@@ -40,6 +40,11 @@ export const ITEM_PAID_SQL = `
 export const PAYMENT_STATE_SQL = `
   case
     when i.explicit_status <> 'active' then i.explicit_status
+    when i.kind = 'payroll_deduction' and i.income_record_id is not null then 'deducted'
+    when i.kind = 'income' and i.income_record_id is not null and
+      (select r.expected_net_satang from income_record r where r.id=i.income_record_id)=0 then 'not_required'
+    when i.kind = 'income' and i.income_record_id is not null and pay.matched_satang >=
+      (select r.expected_net_satang from income_record r where r.id=i.income_record_id) then 'verified'
     when pay.paid_satang = 0 and i.due_date is not null and i.due_date < current_date then 'overdue'
     when pay.paid_satang = 0 then 'unpaid'
     when pay.paid_satang < i.planned_amount_satang then 'partial'
@@ -122,6 +127,8 @@ export type OwnedPlan = { id: number; month_start: string; status: 'open' | 'clo
 
 export type OwnedItem = {
   id: number;
+  income_record_id: number | null;
+  installment_due_id: number | null;
   monthly_plan_id: number;
   kind: 'income' | 'payroll_deduction' | 'expense' | 'reserve';
   planned_amount_satang: number;
@@ -144,10 +151,10 @@ export async function loadOwnedItem(
   opts: { requireOpen?: boolean } = {},
 ): Promise<OwnedItem> {
   const { rows } = await db.query<OwnedItem>(
-    `select i.id, i.monthly_plan_id, i.kind, i.planned_amount_satang, p.status as plan_status
+    `select i.id, i.income_record_id, i.installment_due_id, i.monthly_plan_id, i.kind, i.planned_amount_satang, p.status as plan_status
      from monthly_plan_item i
      join monthly_plan p on p.id = i.monthly_plan_id
-     where i.id = $1 and p.user_id = $2`,
+     where i.id = $1 and p.user_id = $2${opts.requireOpen ? ' for update of p, i' : ''}`,
     [itemId, userId],
   );
   const item = rows[0];
@@ -163,7 +170,7 @@ export async function loadOwnedPlanByMonth(
   opts: { requireOpen?: boolean } = {},
 ): Promise<OwnedPlan> {
   const { rows } = await db.query<OwnedPlan>(
-    'select id, month_start, status from monthly_plan where user_id = $1 and month_start = $2',
+    `select id, month_start, status from monthly_plan where user_id = $1 and month_start = $2${opts.requireOpen ? ' for update' : ''}`,
     [userId, monthStart],
   );
   const plan = rows[0];

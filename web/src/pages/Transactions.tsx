@@ -38,6 +38,11 @@ export default function Transactions() {
   const [minBahtInput, setMinBahtInput] = useState(searchParams.get('min_baht') ?? '');
   const [maxBahtInput, setMaxBahtInput] = useState(searchParams.get('max_baht') ?? '');
   const [selectedTxnId, setSelectedTxnId] = useState<number | null>(null);
+  const linkedTxnId = searchParams.get('txn');
+  useEffect(() => {
+    const txnId = Number(linkedTxnId);
+    setSelectedTxnId(linkedTxnId != null && Number.isSafeInteger(txnId) && txnId > 0 ? txnId : null);
+  }, [linkedTxnId]);
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
 

@@ -23,6 +23,7 @@ import {
 import { parsers } from './parsers/index.js';
 import type { ParsedStatement } from './parsers/types.js';
 import { reconcilePayments } from './services/payment-reconciliation.js';
+import { reconcileIncome } from './services/income-records.js';
 import { reconcileTransfers } from './services/transfer-matching.js';
 
 type Bank = {
@@ -124,6 +125,7 @@ async function doSync(emailAccountId: number, requestFull: boolean): Promise<Syn
   // เหมือนกัน และแยก try/catch ของตัวเอง ไม่ให้ความล้มเหลวของอันหนึ่งกินอีกอันหรือล้ม sync ทั้งรอบ
   try {
     await reconcilePayments(pool, account.user_id);
+    await tx(c => reconcileIncome(c, account.user_id));
   } catch (e) {
     console.error(`[worker] mailbox=${emailAccountId} reconcilePayments ล้มเหลว:`, e);
   }

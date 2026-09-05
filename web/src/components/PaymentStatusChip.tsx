@@ -18,6 +18,8 @@ import type { PaymentState } from '../api.js';
 type Spec = { label: string; color: 'default' | 'success' | 'error'; icon: ReactElement };
 
 const SPECS: Record<PaymentState, Spec> = {
+  deducted: { label: 'หักจากรายได้', color: 'default', icon: <CheckCircleRounded /> },
+  not_required: { label: 'ไม่ต้องรับเงิน', color: 'default', icon: <CheckCircleRounded /> },
   unpaid: { label: 'ยังไม่จ่าย', color: 'default', icon: <RadioButtonUncheckedRounded /> },
   overdue: { label: 'เกินกำหนด', color: 'error', icon: <WarningAmberRounded /> },
   partial: { label: 'จ่ายบางส่วน', color: 'default', icon: <DonutLargeRounded /> },

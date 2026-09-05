@@ -5,6 +5,7 @@ import { pool, query, tx } from '../db.js';
 import { enumStr, HttpError, id, isoDate, pathId, satang, str, optionalStr, type Body } from '../http.js';
 import { generateMonthlyItems } from '../services/recurring-generation.js';
 import { reconcilePayments } from '../services/payment-reconciliation.js';
+import { declarePayment, generateInstallmentItems } from '../services/installments.js';
 import {
   assertOwnedRefs,
   ITEM_PAID_SQL,
@@ -64,7 +65,7 @@ function assertDueDateInMonth(dueDate: string | null, monthStart: string): void 
 // เอา alias `i` (monthly_plan_item) และ `pay` (จาก ITEM_PAID_SQL) ที่ PAYMENT_STATE_SQL ต้องการ
 // $1 = monthly_plan_id, $2 = user_id (ใช้ re-join bank_account เป็นด่านที่สองตาม §6.1)
 const ITEMS_SQL = `
-  select i.id, i.recurring_rule_id, i.installment_due_id, i.kind, i.name,
+  select i.id, i.recurring_rule_id, i.installment_due_id, i.income_record_id, i.kind, i.name,
          i.category_id, c.name as category_name,
          i.planned_amount_satang, i.due_date, i.explicit_status, i.note,
          pay.paid_satang, pay.matched_satang, pay.needs_review_count,
@@ -118,12 +119,13 @@ monthlyPlansRouter.get('/monthly-plans/:month', requireUser(async (req, res, use
         closed_at: string | null;
         closed_snapshot: unknown;
       }>(
-        'select id, month_start, status, closed_at, closed_snapshot from monthly_plan where user_id = $1 and month_start = $2',
+        'select id, month_start, status, closed_at, closed_snapshot from monthly_plan where user_id = $1 and month_start = $2 for update',
         [user.id, monthStart],
       )
     ).rows[0]!;
 
     const generated = plan.status === 'open' ? await generateMonthlyItems(c, user.id, plan.id, monthStart) : 0;
+    if (plan.status === 'open') await generateInstallmentItems(c, user.id, plan.id);
 
     const [totals, paymentStatus, items] = await Promise.all([
       planTotals(c, plan.id),
@@ -209,6 +211,8 @@ monthlyPlansRouter.post('/monthly-plans/:month/copy-previous', requireUser(async
        and sp.month_start = $4
        and s.explicit_status = 'active'
        and s.recurring_rule_id is null
+       and s.income_record_id is null
+       and s.installment_due_id is null
        and not exists (
          select 1 from monthly_plan_item t
          where t.monthly_plan_id = $1 and t.kind = s.kind and t.name = s.name
@@ -228,6 +232,7 @@ monthlyPlansRouter.patch('/monthly-plan-items/:id', requireUser(async (req, res,
 
   const updated = await tx(async (c) => {
     const item = await loadOwnedItem(c, user.id, itemId, { requireOpen: true });
+    if (item.income_record_id != null || item.installment_due_id != null) throw new HttpError(409, 'แก้รายการนี้ผ่านหน้ารายได้หรือแผนผ่อน');
     const monthStart = (
       await c.query<{ month_start: string }>('select month_start from monthly_plan where id = $1', [
         item.monthly_plan_id,
@@ -272,7 +277,8 @@ monthlyPlansRouter.patch('/monthly-plan-items/:id', requireUser(async (req, res,
 monthlyPlansRouter.post('/monthly-plan-items/:id/skip', requireUser(async (req, res, user) => {
   const itemId = pathId(req);
   const updated = await tx(async (c) => {
-    await loadOwnedItem(c, user.id, itemId, { requireOpen: true });
+    const item = await loadOwnedItem(c, user.id, itemId, { requireOpen: true });
+    if (item.income_record_id != null || item.installment_due_id != null) throw new HttpError(409, 'จัดการรายการนี้ผ่านหน้ารายได้หรือแผนผ่อน');
     const { rows } = await c.query(
       `update monthly_plan_item set explicit_status = 'skipped', updated_at = now() where id = $1 returning *`,
       [itemId],
@@ -295,20 +301,7 @@ monthlyPlansRouter.post('/monthly-plan-items/:id/skip', requireUser(async (req, 
 monthlyPlansRouter.post('/monthly-plan-items/:id/payments', requireUser(async (req, res, user) => {
   const itemId = pathId(req);
   const b = req.body as Body;
-  await loadOwnedItem(pool, user.id, itemId, { requireOpen: true });
-
-  const amountSatang = satang(b, 'amount_satang');
-  if (amountSatang <= 0) throw new HttpError(400, 'amount_satang ต้องมากกว่า 0');
-  const bankAccountId = id(b, 'bank_account_id');
-  await assertOwnedRefs(pool, user.id, { bankAccountId });
-
-  const inserted = (
-    await query<{ id: number }>(
-      `insert into monthly_item_payment (monthly_plan_item_id, amount_satang, paid_date, bank_account_id)
-       values ($1, $2, $3, $4) returning id`,
-      [itemId, amountSatang, isoDate(b, 'paid_date'), bankAccountId],
-    )
-  ).rows[0]!;
+  const inserted = await tx(c => declarePayment(c, user.id, itemId, b));
 
   try {
     await reconcilePayments(pool, user.id);
@@ -343,8 +336,9 @@ monthlyPlansRouter.patch('/monthly-item-payments/:id', requireUser(async (req, r
       status: string;
       amount_satang: number;
       kind: string;
+      income_record_id: number | null;
     }>(
-      `select p.monthly_plan_item_id, p.bank_account_id, p.status, p.amount_satang, i.kind
+      `select p.monthly_plan_item_id, p.bank_account_id, p.status, p.amount_satang, i.kind, i.income_record_id
        from monthly_item_payment p
        join monthly_plan_item i on i.id = p.monthly_plan_item_id
        join monthly_plan mp on mp.id = i.monthly_plan_id
@@ -354,6 +348,8 @@ monthlyPlansRouter.patch('/monthly-item-payments/:id', requireUser(async (req, r
     );
     const payment = owned.rows[0];
     if (!payment) throw new HttpError(404, 'ไม่พบรายการจ่าย');
+    if (payment.income_record_id != null) throw new HttpError(409, 'จัดการคู่เงินเข้าผ่านรายได้');
+    if (!cancelling && payment.status === 'cancelled') throw new HttpError(409, 'รายการจ่ายถูกยกเลิกแล้ว');
 
     if (cancelling) {
       await loadOwnedItem(c, user.id, payment.monthly_plan_item_id, { requireOpen: true });

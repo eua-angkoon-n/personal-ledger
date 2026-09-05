@@ -114,8 +114,17 @@ test('migrate() roll-forward', async (t) => {
     );
     seededTxnId = txn.rows[0]!.id;
 
-    const rest = await db.migrate();
+    const throughSlice5 = await db.migrate({ upTo: '007_kbank_statement_parser.sql' });
+    const legacyPlan = (await db.pool.query(
+      "insert into monthly_plan(user_id,month_start) values($1,'2026-07-01') returning id", [userId],
+    )).rows[0]!.id;
+    const legacyItem = (await db.pool.query(
+      "insert into monthly_plan_item(monthly_plan_id,kind,name,planned_amount_satang) values($1,'income','Legacy income',10000) returning id", [legacyPlan],
+    )).rows[0]!.id;
+    const rest = [...throughSlice5, ...await db.migrate()];
     assert.deepEqual(rest, files.filter((f) => f > upTo));
+    const preservedItem = (await db.pool.query('select planned_amount_satang,income_record_id,installment_due_id from monthly_plan_item where id=$1', [legacyItem])).rows[0];
+    assert.deepEqual(preservedItem, { planned_amount_satang: 10000, income_record_id: null, installment_due_id: null });
 
     const preservedKbank = await db.pool.query<{ sender_email: string; parser_key: string; is_active: boolean }>(
       "select sender_email, parser_key, is_active from bank where lower(name) = 'kbank'",

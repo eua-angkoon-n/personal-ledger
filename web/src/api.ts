@@ -211,7 +211,7 @@ export type AccountBalances = { from: string; to: string; rows: AccountBalanceRo
 export type DataCoverage = { rows: AccountCoverage[]; data_coverage_note: string };
 
 export type PlanKind = 'income' | 'payroll_deduction' | 'expense' | 'reserve';
-export type PaymentState = 'unpaid' | 'overdue' | 'partial' | 'declared' | 'verified' | 'skipped' | 'cancelled';
+export type PaymentState = 'unpaid' | 'overdue' | 'partial' | 'declared' | 'verified' | 'skipped' | 'cancelled' | 'deducted' | 'not_required';
 export type PaymentRowStatus = 'declared' | 'matched' | 'needs_review' | 'cancelled';
 
 export type PlanItemPayment = {
@@ -227,6 +227,7 @@ export type PlanItemPayment = {
 
 export type PlanItem = {
   id: number;
+  income_record_id: number | null;
   recurring_rule_id: number | null;
   installment_due_id: number | null;
   kind: PlanKind;
@@ -243,6 +244,71 @@ export type PlanItem = {
   payment_state: PaymentState;
   payments: PlanItemPayment[];
 };
+
+export type IncomeDeduction = {
+  id: number;
+  monthly_plan_item_id: number;
+  deduction_type: 'social_security' | 'withholding_tax' | 'other';
+  name: string;
+  amount_satang: number;
+};
+export type IncomeRecord = {
+  id: number;
+  monthly_plan_item_id: number;
+  name: string;
+  gross_amount_satang: number;
+  expected_net_satang: number;
+  bank_account_id: number | null;
+  income_date: string | null;
+  auto_match: boolean;
+  deposit_txn_id: number | null;
+  match_status: 'pending' | 'needs_review' | 'matched' | 'not_required';
+  deductions: IncomeDeduction[];
+};
+export type IncomeCandidate = {
+  id: number;
+  txn_date: string;
+  description: string;
+  amount_satang: number;
+  account_nickname: string;
+};
+export type InstallmentTotals = {
+  total_payable_satang: number;
+  paid_satang: number;
+  matched_satang: number;
+  outstanding_satang: number;
+};
+export type InstallmentPlan = InstallmentTotals & {
+  id: number;
+  name: string;
+  total_amount_satang: number;
+  down_payment_satang: number;
+  financed_amount_satang: number;
+  interest_satang: number;
+  fee_satang: number;
+  installment_count: number;
+  frequency_unit: 'day' | 'month' | 'year';
+  frequency_interval: number;
+  first_due_date: string;
+  down_payment_date: string | null;
+  default_account_id: number | null;
+  category_id: number | null;
+  status: 'active' | 'completed' | 'cancelled';
+};
+export type InstallmentDue = {
+  id: number;
+  installment_no: number;
+  due_date: string;
+  amount_satang: number;
+  paid_satang: number;
+  matched_satang: number;
+  outstanding_satang: number;
+  status: 'planned' | 'partially_paid' | 'paid' | 'overdue' | 'skipped' | 'cancelled';
+  monthly_plan_item_id: number | null;
+  plan_closed: boolean;
+  payments: PlanItemPayment[];
+};
+export type InstallmentDetail = InstallmentPlan & { dues: InstallmentDue[]; structural_editable: boolean };
 
 export type PlanTotals = {
   planned_income_satang: number;
