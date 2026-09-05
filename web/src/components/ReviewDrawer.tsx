@@ -223,13 +223,20 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                 </TextField>
                 <TextField label="โน้ต (ไม่บังคับ)" value={note} onChange={(e) => setNote(e.target.value)} size="small" multiline minRows={2} slotProps={{ htmlInput: { maxLength: 500 } }} />
                 {classification === 'income' && detail.direction === 'credit' && (
-                  <Alert
-                    severity="info"
-                    action={<Button size="small" onClick={() => setIncomeModalOpen(true)}>บันทึกเป็นรายได้เต็ม</Button>}
-                  >
-                    ถ้านี่คือเงินเดือนหรือรายได้ประจำ กดปุ่มนี้เพื่อบันทึกเป็น "รายได้เต็ม" ได้เลย —
-                    จะขึ้นเป็น "เงินได้จากงานประจำ" ในหน้าภาษี ส่วน Tax Treatment ด้านล่างมีไว้สำหรับรายได้ธุรกิจอื่นเท่านั้น
-                  </Alert>
+                  detail.income_record_id != null ? (
+                    <Alert severity="success">
+                      บันทึกเป็นรายได้เต็มไปแล้ว — นับอยู่ใน "เงินได้จากงานประจำ" ของหน้าภาษี
+                      (แก้ยอดหรือเพิ่มรายการหักได้ที่หน้าวางแผนเดือนนี้)
+                    </Alert>
+                  ) : (
+                    <Alert
+                      severity="info"
+                      action={<Button size="small" onClick={() => setIncomeModalOpen(true)}>บันทึกเป็นรายได้เต็ม</Button>}
+                    >
+                      ถ้านี่คือเงินเดือนหรือรายได้ประจำ กดปุ่มนี้เพื่อบันทึกเป็น "รายได้เต็ม" ได้เลย —
+                      จะขึ้นเป็น "เงินได้จากงานประจำ" ในหน้าภาษี ส่วน Tax Treatment ด้านล่างมีไว้สำหรับรายได้ธุรกิจอื่นเท่านั้น
+                    </Alert>
+                  )
                 )}
                 <TextField
                   select
@@ -404,6 +411,7 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
           onClose={() => setIncomeModalOpen(false)}
           onCreated={() => {
             onNotice({ message: 'บันทึกรายได้เต็มแล้ว — ดูยอดได้ที่หน้าภาษี', severity: 'success' });
+            void load(detail.id); // ให้ income_record_id อัปเดต ปุ่มจะได้เปลี่ยนเป็น "บันทึกไปแล้ว" ทันที
             onSaved();
           }}
         />

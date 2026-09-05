@@ -72,6 +72,8 @@ export default function IncomeQuickAddModal({ open, onClose, onCreated, txn, acc
         // ไม่มีบัญชีก็ไม่มีอะไรให้จับคู่ — ปิด auto_match ไม่งั้นค้างสถานะ "รอ statement" ตลอดไป
         auto_match: accountId !== '',
         deductions,
+        // ผูกกับเงินเข้าก้อนที่ผู้ใช้กดมาโดยตรง — ฝั่ง API ใช้ตัวนี้กันบันทึกธุรกรรมเดิมซ้ำด้วย
+        ...(txn ? { source_txn_id: txn.id } : {}),
       });
       onCreated();
       onClose();

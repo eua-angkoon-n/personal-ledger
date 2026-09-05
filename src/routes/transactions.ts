@@ -83,7 +83,11 @@ transactionsRouter.get('/transactions/:id', requireUser(async (req, res, user) =
             b.id as bank_id, b.name as bank_name,
             ${EFFECTIVE_CLASSIFICATION_SQL} as classification, ${EFFECTIVE_REVIEW_STATUS_SQL} as review_status,
             an.note as annotation_note, an.tax_entity_id, an.tax_treatment,
-            st.id as statement_id, st.period_start, st.period_end
+            st.id as statement_id, st.period_start, st.period_end,
+            -- ธุรกรรมนี้ถูกบันทึกเป็น "รายได้เต็ม" ไปแล้วหรือยัง — หน้าเว็บใช้ซ่อนปุ่มบันทึกซ้ำ
+            (select ir.id from monthly_item_payment p
+             join income_record ir on ir.monthly_plan_item_id = p.monthly_plan_item_id
+             where p.txn_id = t.id and p.status = 'matched' and ir.user_id = $1) as income_record_id
      from txn t
      join bank_account a on a.id = t.bank_account_id
      join bank b on b.id = a.bank_id

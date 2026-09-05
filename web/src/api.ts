@@ -138,6 +138,8 @@ export type TxnDetail = {
   annotation_note: string | null;
   tax_entity_id: number | null;
   tax_treatment: TaxTreatment | null;
+  // ไม่ null = ธุรกรรมนี้ถูกบันทึกเป็น "รายได้เต็ม" ไปแล้ว (กันกดบันทึกซ้ำจนรายได้นับสองรอบ)
+  income_record_id: number | null;
   statement_id: number;
   period_start: string | null;
   period_end: string | null;

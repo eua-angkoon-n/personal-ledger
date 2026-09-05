@@ -21,6 +21,7 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
   const { taxCalculationsRouter } = await import('../src/routes/tax-calculations.js');
   const { transactionsRouter } = await import('../src/routes/transactions.js');
   const { auditLogRouter } = await import('../src/routes/audit-log.js');
+  const { incomeRecordsRouter } = await import('../src/routes/income-records.js');
 
   function appFor(userId: number) {
     const app = express();
@@ -33,6 +34,7 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     app.use('/api', taxCalculationsRouter);
     app.use('/api', transactionsRouter);
     app.use('/api', auditLogRouter);
+    app.use('/api', incomeRecordsRouter);
     app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
       if (err instanceof HttpError) return void res.status(err.status).json({ error: err.message });
       const code = (err as { code?: string }).code;
@@ -374,6 +376,44 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     assert.equal(body.inputs.withholdingSatang, 1000000, 'withholding ต้องรวมทั้งสองแถว');
   });
 
+  // กดปุ่ม "บันทึกเป็นรายได้เต็ม" ซ้ำบนธุรกรรมเดิม ต้องไม่ได้รายได้สองก้อนจากเงินเข้าก้อนเดียว
+  await t.test('บันทึกธุรกรรมเดิมเป็นรายได้ซ้ำไม่ได้ — เงินเข้าก้อนเดียวต้องนับครั้งเดียว', async () => {
+    const salaryTxn = await insertTxn(3000000, 'credit', '2026-11-28');
+    const body = {
+      month: '2026-11',
+      name: 'เงินเดือน พ.ย.',
+      gross_amount_satang: 3000000,
+      bank_account_id: bankAccountId,
+      income_date: '2026-11-28',
+      auto_match: true,
+      deductions: [],
+      source_txn_id: salaryTxn,
+    };
+
+    const first = await app.request('/api/income-records', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(first.status, 201);
+
+    const beforeSecond = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
+
+    const second = await app.request('/api/income-records', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(second.status, 409, 'กดซ้ำต้องถูกปฏิเสธ ไม่ใช่สร้างรายได้ก้อนที่สอง');
+
+    const afterSecond = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
+    assert.equal(
+      afterSecond.inputs.employmentIncomeSatang,
+      beforeSecond.inputs.employmentIncomeSatang,
+      'ยอดเงินได้ต้องไม่เพิ่มจากการกดซ้ำ',
+    );
+
+    // ธุรกรรมที่บันทึกไปแล้วต้องบอกได้ว่าผูกกับรายได้ไหน (หน้าเว็บจะได้ซ่อนปุ่มแทนที่จะให้กดแล้ว error)
+    const detail = (await (await app.request(`/api/transactions/${salaryTxn}`)).json()) as any;
+    assert.ok(detail.income_record_id != null, 'GET /transactions/:id ต้องบอกว่าธุรกรรมนี้เป็นรายได้แล้ว');
+  });
+
   // เกณฑ์ต้องแคบพอ: บนข้อมูลจริงถ้าเสนอ "ทุกเงินเข้าที่ยังไม่มี income_record" จะได้ 53 รายการ
   // (เงินโอนจากญาติ ฝากเงินสด ดอกเบี้ย เศษ EDC ปนหมด) กดยืนยันทีเดียวคือได้รายได้ปลอมเต็มฐาน
   await t.test('เสนอเฉพาะเงินเข้าที่เข้าสม่ำเสมอและยอดใกล้เคียงกัน ไม่ใช่ทุกเงินเข้า', async () => {
@@ -411,6 +451,7 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     for (const id of payroll) assert.ok(ids.includes(id), 'เงินเดือนที่เข้าทุกเดือนยอดใกล้เคียงกันต้องถูกเสนอ');
 
     // จับคู่ income_record กับเงินเดือนงวดหนึ่งแล้ว → งวดนั้นต้องหายจากรายการที่เสนอ
+    const employmentBefore = res.inputs.employmentIncomeSatang as number;
     const plan = (
       await db.pool.query<{ id: number }>(`insert into monthly_plan (user_id, month_start) values ($1, '2026-01-01') returning id`, [userA])
     ).rows[0]!.id;
@@ -434,7 +475,7 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     const done = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
     const doneIds = done.unrecorded_income_txns.map((r: { id: number }) => r.id);
     assert.ok(!doneIds.includes(payroll[0]), 'บันทึกเป็นรายได้แล้วต้องเลิกเสนอ');
-    assert.equal(done.inputs.employmentIncomeSatang, 50000000 + 4000000, 'ยอดต้องเข้าเงินได้จากงานประจำ');
+    assert.equal(done.inputs.employmentIncomeSatang - employmentBefore, 4000000, 'ยอดต้องเข้าเงินได้จากงานประจำ');
 
     for (const id of [oneOff, ...erratic]) {
       await db.pool.query('delete from txn where id = $1', [id]);
