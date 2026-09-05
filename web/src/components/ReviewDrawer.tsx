@@ -28,7 +28,7 @@ import {
 import { formatDate, parseBahtToSatang } from '../format.js';
 import { dataTextSx } from '../theme.js';
 import { LoadError, type Notice } from '../ui.js';
-import IncomeFromTxnModal from './IncomeFromTxnModal.js';
+import IncomeQuickAddModal from './IncomeQuickAddModal.js';
 import Money from './Money.js';
 
 const CLASSIFICATION_LABEL: Record<Classification, string> = {
@@ -398,8 +398,8 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
         ) : null}
       </Box>
       {detail && (
-        <IncomeFromTxnModal
-          detail={detail}
+        <IncomeQuickAddModal
+          txn={detail}
           open={incomeModalOpen}
           onClose={() => setIncomeModalOpen(false)}
           onCreated={() => {

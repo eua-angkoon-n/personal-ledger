@@ -4,13 +4,15 @@ import {
   Alert, Box, Button, Checkbox, Chip, Collapse, Divider, FormControlLabel, FormGroup, IconButton,
   MenuItem, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography,
 } from '@mui/material';
+import AddRounded from '@mui/icons-material/AddRounded';
 import CalculateRounded from '@mui/icons-material/CalculateRounded';
 import DownloadRounded from '@mui/icons-material/DownloadRounded';
 import ExpandMoreRounded from '@mui/icons-material/ExpandMoreRounded';
 import PrintRounded from '@mui/icons-material/PrintRounded';
 import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded';
-import { post, req, type TaxCalculationSnapshot, type TaxEntity, type TaxSummary as TaxSummaryResponse } from '../api.js';
+import { post, req, type Account, type TaxCalculationSnapshot, type TaxEntity, type TaxSummary as TaxSummaryResponse } from '../api.js';
 import DeductionClaimSection from '../components/DeductionClaimSection.js';
+import IncomeQuickAddModal from '../components/IncomeQuickAddModal.js';
 import Money from '../components/Money.js';
 import SummaryCard from '../components/SummaryCard.js';
 import { formatDate, formatDateTime } from '../format.js';
@@ -47,9 +49,12 @@ export default function TaxSummary() {
   const [expandedSnapshotId, setExpandedSnapshotId] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
   const [unchecked, setUnchecked] = useState<number[]>([]);
+  const [addIncomeOpen, setAddIncomeOpen] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>([]);
 
   useEffect(() => {
     let current = true;
+    void req<Account[]>('/api/accounts').then((rows) => { if (current) setAccounts(rows); }).catch(() => {});
     req<TaxEntity[]>('/api/tax-entities').then((rows) => {
       if (!current) return;
       setEntities(rows);
@@ -166,6 +171,7 @@ export default function TaxSummary() {
         >
           CSV
         </Button>
+        <Button startIcon={<AddRounded />} variant="outlined" onClick={() => setAddIncomeOpen(true)}>เพิ่มรายได้เอง</Button>
         <Button startIcon={<PrintRounded />} variant="outlined" onClick={() => window.print()}>พิมพ์ (PDF)</Button>
       </Stack>
 
@@ -388,6 +394,15 @@ export default function TaxSummary() {
       {entity?.entity_type !== 'individual' && summary && (
         <Alert severity="info" sx={{ mt: 3 }}>{summary.estimate_unavailable_reason}</Alert>
       )}
+      <IncomeQuickAddModal
+        open={addIncomeOpen}
+        accounts={accounts}
+        onClose={() => setAddIncomeOpen(false)}
+        onCreated={() => {
+          setNotice({ message: 'เพิ่มรายได้เต็มแล้ว', severity: 'success' });
+          setRevision((n) => n + 1);
+        }}
+      />
       <FeedbackSnackbar notice={notice} onClose={() => setNotice(null)} />
     </Box>
   );
