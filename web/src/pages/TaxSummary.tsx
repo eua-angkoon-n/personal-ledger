@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Alert, Box, Button, Chip, Collapse, Divider, IconButton, MenuItem, Paper, Stack, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, TextField, Typography,
+  Alert, Box, Button, Checkbox, Chip, Collapse, Divider, FormControlLabel, FormGroup, IconButton,
+  MenuItem, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography,
 } from '@mui/material';
 import CalculateRounded from '@mui/icons-material/CalculateRounded';
 import DownloadRounded from '@mui/icons-material/DownloadRounded';
@@ -46,6 +46,7 @@ export default function TaxSummary() {
   const [revision, setRevision] = useState(0);
   const [expandedSnapshotId, setExpandedSnapshotId] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
+  const [unchecked, setUnchecked] = useState<number[]>([]);
 
   useEffect(() => {
     let current = true;
@@ -76,14 +77,17 @@ export default function TaxSummary() {
     navigate(`/transactions?${new URLSearchParams(params).toString()}`);
   };
 
-  // ระบบเจอเงินเข้าที่ยังไม่ได้บันทึกเป็นรายได้เต็มให้แล้ว — ปุ่มนี้บันทึกทีเดียวทั้งชุด
+  // ระบบเจอเงินเข้าที่น่าจะเป็นรายได้ประจำให้แล้ว แต่ต้องติ๊กยืนยันเป็นรายการก่อนเสมอ —
+  // heuristic ผิดได้ และรายได้ปลอมในฐานแก้ยากกว่าการกดเพิ่มเอง (ข้อมูลจริงมีเงินโอนจากญาติ/ฝากเงินสดปนอยู่เยอะ)
   // ยอดก่อนหัก default = ยอดที่เข้าบัญชีจริง (แก้ทีหลังได้ที่หน้าวางแผนถ้าสลิปมีรายการหัก)
   // ยิง POST /api/income-records เดิมทีละรายการ ซึ่ง reconcileIncome ให้ท้ายสุดอยู่แล้ว จึงจับคู่เองทันที
-  const recordAllIncome = async () => {
+  const recordSelectedIncome = async () => {
     if (!summary) return;
+    const chosen = summary.unrecorded_income_txns.filter((t) => !unchecked.includes(t.id));
+    if (chosen.length === 0) return;
     setRecording(true);
     const failed: string[] = [];
-    for (const txn of summary.unrecorded_income_txns) {
+    for (const txn of chosen) {
       try {
         await post('/api/income-records', {
           month: txn.txn_date.slice(0, 7),
@@ -99,9 +103,10 @@ export default function TaxSummary() {
       }
     }
     setRecording(false);
+    setUnchecked([]);
     setNotice(
       failed.length === 0
-        ? { message: 'บันทึกเป็นรายได้เต็มแล้วทั้งหมด', severity: 'success' }
+        ? { message: 'บันทึกเป็นรายได้เต็มแล้ว', severity: 'success' }
         : { message: `บันทึกไม่สำเร็จ ${failed.length} รายการ: ${failed[0]}`, severity: 'error' },
     );
     setRevision((n) => n + 1);
@@ -173,34 +178,46 @@ export default function TaxSummary() {
       {loading ? <TableSkeleton rows={4} /> : summary && (
         <>
           {summary.unrecorded_income_txns.length > 0 && (
-            <Alert
-              severity="warning"
-              sx={{ mt: 3 }}
-              action={
-                <Button size="small" variant="contained" disabled={recording} onClick={() => void recordAllIncome()}>
-                  {recording ? 'กำลังบันทึก…' : `บันทึกทั้งหมด (${summary.unrecorded_income_txns.length})`}
-                </Button>
-              }
-            >
+            <Alert severity="warning" sx={{ mt: 3 }}>
               <Typography sx={{ fontWeight: 650, mb: 0.5 }}>
-                เจอเงินเข้า {summary.unrecorded_income_txns.length} รายการที่ยังไม่ได้นับเป็นรายได้
+                เจอเงินเข้าที่น่าจะเป็นรายได้ประจำ {summary.unrecorded_income_txns.length} รายการ ยังไม่ได้นับเป็นรายได้
               </Typography>
               <Typography variant="body2" sx={{ mb: 1 }}>
-                กด "บันทึกทั้งหมด" แล้วยอดจะขึ้นในหน้านี้ทันที (ใช้ยอดที่เข้าบัญชีจริงเป็นยอดก่อนหัก —
-                ถ้าสลิปมีหักประกันสังคม/ภาษี ณ ที่จ่าย ค่อยไปเติมทีหลังที่หน้าวางแผนได้)
+                ติ๊กเฉพาะรายการที่เป็นรายได้จริง แล้วกดบันทึก — จะใช้ยอดที่เข้าบัญชีเป็นยอดก่อนหัก
+                (ถ้าสลิปมีหักประกันสังคม/ภาษี ณ ที่จ่าย ค่อยไปเติมทีหลังที่หน้าวางแผนได้)
               </Typography>
-              <Stack spacing={0.25}>
-                {summary.unrecorded_income_txns.slice(0, 5).map((txn) => (
-                  <Typography key={txn.id} variant="body2" sx={dataTextSx}>
-                    {formatDate(txn.txn_date)} · {txn.account_nickname} · <Money satang={txn.amount_satang} tone="income" />
-                  </Typography>
+              <FormGroup sx={{ mb: 1 }}>
+                {summary.unrecorded_income_txns.map((txn) => (
+                  <FormControlLabel
+                    key={txn.id}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={!unchecked.includes(txn.id)}
+                        onChange={(e) =>
+                          setUnchecked((prev) => (e.target.checked ? prev.filter((id) => id !== txn.id) : [...prev, txn.id]))
+                        }
+                      />
+                    }
+                    label={
+                      <Typography variant="body2" sx={dataTextSx}>
+                        {formatDate(txn.txn_date)} · {txn.account_nickname} · <Money satang={txn.amount_satang} tone="income" />
+                        <Box component="span" sx={{ color: 'text.secondary' }}> · {txn.description.slice(0, 45)}</Box>
+                      </Typography>
+                    }
+                  />
                 ))}
-                {summary.unrecorded_income_txns.length > 5 && (
-                  <Typography variant="body2" color="text.secondary">
-                    และอีก {summary.unrecorded_income_txns.length - 5} รายการ
-                  </Typography>
-                )}
-              </Stack>
+              </FormGroup>
+              <Button
+                size="small"
+                variant="contained"
+                disabled={recording || unchecked.length === summary.unrecorded_income_txns.length}
+                onClick={() => void recordSelectedIncome()}
+              >
+                {recording
+                  ? 'กำลังบันทึก…'
+                  : `บันทึกเป็นรายได้เต็ม (${summary.unrecorded_income_txns.length - unchecked.length})`}
+              </Button>
             </Alert>
           )}
 

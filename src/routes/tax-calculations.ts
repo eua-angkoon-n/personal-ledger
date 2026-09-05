@@ -156,33 +156,54 @@ export type UnrecordedIncomeTxn = {
   account_nickname: string;
 };
 
+// เกณฑ์ "น่าจะเป็นเงินเดือน/รายได้ประจำ" — ตั้งใจให้แคบไว้ก่อน เสนอผิดแย่กว่าเสนอไม่ครบมาก
+// (เสนอผิด = ผู้ใช้กดยืนยันแล้วได้รายได้ปลอมในฐาน ส่วนเสนอไม่ครบ = เพิ่มเองจากหน้าธุรกรรมได้)
+// วัดกับข้อมูลจริง: ไม่ใส่เกณฑ์พวกนี้เลยได้ 53 รายการ (เงินโอนจากญาติ ฝากเงินสด ดอกเบี้ย EDC ปนหมด)
+// ใส่แล้วเหลือเฉพาะเงินเดือนที่เข้าทุกเดือนจริง
+const RECURRING_MIN_MONTHS = 3; // เข้าอย่างน้อย 3 เดือนต่างกันในปีภาษีนั้น
+const RECURRING_MIN_SATANG = 100000; // ต่ำกว่า 1,000 บาท ตัดทิ้ง — ดอกเบี้ย/เศษ EDC ไม่ใช่รายได้ประจำ
+
 /**
- * เงินเข้าที่ "น่าจะเป็นรายได้" แต่ยังไม่มี income_record รองรับ — ระบบหาให้เอง ผู้ใช้กดปุ่มเดียวจบ
+ * เงินเข้าที่ "น่าจะเป็นรายได้ประจำ" แต่ยังไม่มี income_record รองรับ — ระบบหาให้ ผู้ใช้ยืนยัน
  *
  * ทำไมไม่สร้าง income_record ให้เงียบ ๆ เลย: ภาษีต้องใช้ยอด**ก่อนหัก** แต่ statement เห็นแค่ยอดหลังหัก
  * (ADR-0002 ข้อ 5) ถ้าระบบเดา gross = ยอดที่เข้าบัญชี ตัวเลขภาษีจะต่ำกว่าจริงและภาษีหัก ณ ที่จ่ายหายไป
  * ทั้งคู่แบบเงียบ ๆ — ตามแนวเดียวกับ transfer_match ของ 4A คือระบบ "เสนอ" คนเป็นคน "ยืนยัน"
  *
- * ตัดออก: คู่โอนภายใน/excluded (ไม่ใช่รายได้), รายการที่ tag business_income แล้ว (นับไปแล้วอีกทาง),
- * และรายการที่มี income_record จับคู่อยู่แล้ว (กันเสนอซ้ำของที่บันทึกไปแล้ว)
+ * จับกลุ่มด้วย description ที่ถอดตัวเลขออก (เลข ref เปลี่ยนทุกเดือน ชื่อผู้โอนไม่เปลี่ยน) + บัญชีปลายทาง
+ * แล้วคัดเฉพาะกลุ่มที่เข้าหลายเดือนและยอดใกล้เคียงกัน (min*2 >= max) — เงินโอนจากคนรู้จักที่ยอดสะเปะสะปะ
+ * จะตกเกณฑ์นี้ไปเอง โดยไม่ต้องมี list ชื่อผู้โอนที่ต้อง maintain
  */
 async function unrecordedIncomeTxns(userId: number, taxEntityId: number, taxYearCE: number): Promise<UnrecordedIncomeTxn[]> {
   const { rows } = await query<UnrecordedIncomeTxn>(
-    `select t.id, t.txn_date, t.description, t.amount_satang, t.bank_account_id, a.nickname as account_nickname
-     from txn t
-     join bank_account a on a.id = t.bank_account_id
-     left join txn_annotation an on an.txn_id = t.id
-     where a.user_id = $1 and t.direction = 'credit'
-       and (${EFFECTIVE_TAX_ENTITY_SQL}) = $2 and extract(year from t.txn_date) = $3
-       and not t.is_internal_transfer
-       and coalesce(an.classification, '') not in ('internal_transfer', 'excluded')
-       and an.tax_treatment is distinct from 'business_income'
-       and not exists (
-         select 1 from monthly_item_payment p
-         join income_record ir on ir.monthly_plan_item_id = p.monthly_plan_item_id
-         where p.txn_id = t.id and p.status = 'matched'
-       )
-     order by t.txn_date desc
+    `with candidates as (
+       select t.id, t.txn_date, t.description, t.amount_satang, t.bank_account_id, a.nickname as account_nickname,
+              regexp_replace(t.description, '[0-9]+', '', 'g') as pattern
+       from txn t
+       join bank_account a on a.id = t.bank_account_id
+       left join txn_annotation an on an.txn_id = t.id
+       where a.user_id = $1 and t.direction = 'credit'
+         and (${EFFECTIVE_TAX_ENTITY_SQL}) = $2 and extract(year from t.txn_date) = $3
+         and not t.is_internal_transfer
+         and coalesce(an.classification, '') not in ('internal_transfer', 'excluded')
+         and an.tax_treatment is distinct from 'business_income'
+         and t.amount_satang >= ${RECURRING_MIN_SATANG}
+         and not exists (
+           select 1 from monthly_item_payment p
+           join income_record ir on ir.monthly_plan_item_id = p.monthly_plan_item_id
+           where p.txn_id = t.id and p.status = 'matched'
+         )
+     ),
+     recurring as (
+       select pattern, bank_account_id from candidates
+       group by pattern, bank_account_id
+       having count(distinct date_trunc('month', txn_date)) >= ${RECURRING_MIN_MONTHS}
+          and min(amount_satang) * 2 >= max(amount_satang)
+     )
+     select c.id, c.txn_date, c.description, c.amount_satang, c.bank_account_id, c.account_nickname
+     from candidates c
+     join recurring r on r.pattern = c.pattern and r.bank_account_id = c.bank_account_id
+     order by c.txn_date desc
      limit 100`,
     [userId, taxEntityId, taxYearCE],
   );

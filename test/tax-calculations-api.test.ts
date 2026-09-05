@@ -374,45 +374,71 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     assert.equal(body.inputs.withholdingSatang, 1000000, 'withholding ต้องรวมทั้งสองแถว');
   });
 
-  await t.test('ระบบเสนอเงินเข้าที่ยังไม่ได้บันทึกเป็นรายได้ และเลิกเสนอเมื่อบันทึกแล้ว', async () => {
-    const res = await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`);
-    const body = (await res.json()) as any;
-    const ids = body.unrecorded_income_txns.map((r: { id: number }) => r.id);
-    // เงินเดือนที่ผูก income_record ไว้แล้วต้องไม่ถูกเสนอซ้ำ และรายการที่ tag business_income แล้วก็ไม่ต้องเสนอ
-    assert.ok(!ids.includes(businessIncomeTxn), 'รายการที่ tag business_income แล้วต้องไม่ถูกเสนอ');
-    assert.ok(!ids.includes(businessExpenseTxn), 'เงินออกต้องไม่ถูกเสนอเป็นรายได้');
+  // เกณฑ์ต้องแคบพอ: บนข้อมูลจริงถ้าเสนอ "ทุกเงินเข้าที่ยังไม่มี income_record" จะได้ 53 รายการ
+  // (เงินโอนจากญาติ ฝากเงินสด ดอกเบี้ย เศษ EDC ปนหมด) กดยืนยันทีเดียวคือได้รายได้ปลอมเต็มฐาน
+  await t.test('เสนอเฉพาะเงินเข้าที่เข้าสม่ำเสมอและยอดใกล้เคียงกัน ไม่ใช่ทุกเงินเข้า', async () => {
+    const before = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
+    const beforeIds = before.unrecorded_income_txns.map((r: { id: number }) => r.id);
+    assert.ok(!beforeIds.includes(businessIncomeTxn), 'รายการที่ tag business_income แล้วต้องไม่ถูกเสนอ');
+    assert.ok(!beforeIds.includes(businessExpenseTxn), 'เงินออกต้องไม่ถูกเสนอเป็นรายได้');
 
-    // เพิ่มเงินเข้าใหม่ที่ยังไม่ได้ทำอะไรเลย → ต้องถูกเสนอ
-    const freshCredit = await insertTxn(9900000, 'credit', '2026-10-05');
-    const after = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
-    const freshIds = after.unrecorded_income_txns.map((r: { id: number }) => r.id);
-    assert.ok(freshIds.includes(freshCredit), 'เงินเข้าที่ยังไม่มี income_record ต้องถูกเสนอ');
+    // เงินโอนครั้งเดียว ยอดสูง — ต้องไม่ถูกเสนอ (ไม่ใช่รายได้ประจำ)
+    const oneOff = await insertTxn(5000000, 'credit', '2026-10-05');
+    // เงินโอนจากคนรู้จักที่เข้าหลายเดือนแต่ยอดสะเปะสะปะ — ต้องไม่ถูกเสนอ
+    const erratic = [
+      await insertTxn(200000, 'credit', '2026-01-15'),
+      await insertTxn(3000000, 'credit', '2026-02-15'),
+      await insertTxn(150000, 'credit', '2026-03-15'),
+    ];
+    // เงินเดือนจริง: เข้า 3 เดือน ยอดใกล้เคียงกัน description ต่างแค่เลข ref
+    const payroll: number[] = [];
+    for (const [i, date] of ['2026-01-31', '2026-02-28', '2026-03-31'].entries()) {
+      payroll.push(
+        (
+          await db.pool.query<{ id: number }>(
+            `insert into txn (statement_id, bank_account_id, txn_date, description, amount_satang, direction, running_balance_satang)
+             values ($1, $2, $3, $4, $5, 'credit', 100000000) returning id`,
+            [statementId, bankAccountId, date, `รับโอนเงิน: จาก X0993 บจก.ตัวอย่าง PAYROLL Ref 2026${i}00111`, 4000000 + i * 1000],
+          )
+        ).rows[0]!.id,
+      );
+    }
 
-    // จับคู่ income_record กับรายการนั้นแล้ว → ต้องหายจากรายการที่เสนอ
+    const res = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
+    const ids = res.unrecorded_income_txns.map((r: { id: number }) => r.id);
+    assert.ok(!ids.includes(oneOff), 'เงินเข้าครั้งเดียวต้องไม่ถูกเสนอ');
+    for (const id of erratic) assert.ok(!ids.includes(id), 'เงินเข้าหลายเดือนแต่ยอดสะเปะสะปะต้องไม่ถูกเสนอ');
+    for (const id of payroll) assert.ok(ids.includes(id), 'เงินเดือนที่เข้าทุกเดือนยอดใกล้เคียงกันต้องถูกเสนอ');
+
+    // จับคู่ income_record กับเงินเดือนงวดหนึ่งแล้ว → งวดนั้นต้องหายจากรายการที่เสนอ
     const plan = (
-      await db.pool.query<{ id: number }>(`insert into monthly_plan (user_id, month_start) values ($1, '2026-10-01') returning id`, [userA])
+      await db.pool.query<{ id: number }>(`insert into monthly_plan (user_id, month_start) values ($1, '2026-01-01') returning id`, [userA])
     ).rows[0]!.id;
     const item = (
       await db.pool.query<{ id: number }>(
-        `insert into monthly_plan_item (monthly_plan_id, kind, name, planned_amount_satang) values ($1, 'income', 'รายได้ ต.ค.', 9900000) returning id`,
+        `insert into monthly_plan_item (monthly_plan_id, kind, name, planned_amount_satang) values ($1, 'income', 'เงินเดือน ม.ค.', 4000000) returning id`,
         [plan],
       )
     ).rows[0]!.id;
     await db.pool.query(
       `insert into income_record (user_id, monthly_plan_id, monthly_plan_item_id, name, gross_amount_satang, expected_net_satang, bank_account_id, income_date)
-       values ($1, $2, $3, 'รายได้ ต.ค.', 9900000, 9900000, $4, '2026-10-05')`,
+       values ($1, $2, $3, 'เงินเดือน ม.ค.', 4000000, 4000000, $4, '2026-01-31')`,
       [userA, plan, item, bankAccountId],
     );
     await db.pool.query(
       `insert into monthly_item_payment (monthly_plan_item_id, amount_satang, paid_date, bank_account_id, txn_id, status, verified_at)
-       values ($1, 9900000, '2026-10-05', $2, $3, 'matched', now())`,
-      [item, bankAccountId, freshCredit],
+       values ($1, 4000000, '2026-01-31', $2, $3, 'matched', now())`,
+      [item, bankAccountId, payroll[0]],
     );
 
     const done = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
     const doneIds = done.unrecorded_income_txns.map((r: { id: number }) => r.id);
-    assert.ok(!doneIds.includes(freshCredit), 'บันทึกเป็นรายได้แล้วต้องเลิกเสนอ');
-    assert.equal(done.inputs.employmentIncomeSatang, 50000000 + 9900000, 'ยอดต้องเข้าเงินได้จากงานประจำ');
+    assert.ok(!doneIds.includes(payroll[0]), 'บันทึกเป็นรายได้แล้วต้องเลิกเสนอ');
+    assert.equal(done.inputs.employmentIncomeSatang, 50000000 + 4000000, 'ยอดต้องเข้าเงินได้จากงานประจำ');
+
+    for (const id of [oneOff, ...erratic]) {
+      await db.pool.query('delete from txn where id = $1', [id]);
+    }
   });
 
   // ผู้ใช้ส่วนใหญ่มี Tax Entity เดียว — ไม่ควรบังคับให้ไปตั้ง default ที่หน้าบัญชีก่อนตัวเลขถึงจะขึ้น
