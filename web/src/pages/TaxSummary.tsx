@@ -17,6 +17,10 @@ import { formatDate, formatDateTime } from '../format.js';
 import { dataTextSx } from '../theme.js';
 import { EmptyState, FeedbackSnackbar, LoadError, PageHeader, TableSkeleton, type Notice } from '../ui.js';
 
+// §16 ข้อ 13 ของแผนต้นฉบับ — ทุกรายงานต้องระบุว่าไม่รวมเงินสดและ e-Wallet (หน้านี้เป็นรายงานการเงินที่ใหญ่ที่สุด
+// ในระบบ ตัวเลขมาจาก txn ที่ import จาก statement เท่านั้น เหมือน Dashboard/Transactions/MonthlyPlan/Installments)
+const COVERAGE_NOTE = 'ข้อมูลเงินจริงคำนวณจาก Bank Statement ที่นำเข้าสู่ระบบเท่านั้น ไม่รวมเงินสดและ e-Wallet';
+
 function currentTaxYearCE(): number {
   return new Date().getFullYear();
 }
@@ -96,6 +100,7 @@ export default function TaxSummary() {
         title="ประมาณการภาษี"
         description='สรุปรายได้ ค่าใช้จ่าย และค่าลดหย่อนตาม Tax Entity และปีภาษี — ผลลัพธ์เป็น "ประมาณการภาษี" เสมอ ไม่ใช่ยอดที่ต้องชำระจริง ผู้ใช้ต้องตรวจสอบและยืนยัน Tax Treatment เองทุกครั้ง'
       />
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{COVERAGE_NOTE}</Typography>
 
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 3, alignItems: { sm: 'center' }, flexWrap: 'wrap' }}>
         <TextField
