@@ -244,6 +244,13 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                     <MenuItem key={value} value={value}>{label}</MenuItem>
                   ))}
                 </TextField>
+                {taxTreatment === '' && (taxEntityOverride !== '' || detail.account_default_tax_entity_id != null) && (
+                  <Alert severity="warning">
+                    ตั้ง Tax Entity ไว้แล้ว แต่ยังไม่ได้เลือก Tax Treatment — รายการนี้จะ<strong>ยังไม่ถูกนับ</strong>ในหน้าประมาณการภาษี
+                    (ไปโผล่ที่ตัวนับ "ยังไม่ระบุ Tax Treatment" แทน) ถ้าต้องการให้นับเป็น
+                    {detail.direction === 'credit' ? 'รายได้ธุรกิจ ให้เลือก "รายได้ธุรกิจ" ด้านบน' : 'ค่าใช้จ่ายหักภาษีได้ ให้เลือก "ค่าใช้จ่ายหักภาษีได้" ด้านบน'}
+                  </Alert>
+                )}
                 <Button variant="contained" onClick={() => void saveClassification()} disabled={savingClassification} aria-busy={savingClassification} sx={{ alignSelf: 'flex-start' }}>
                   {savingClassification ? 'กำลังบันทึก…' : 'บันทึกการจัดประเภท'}
                 </Button>
