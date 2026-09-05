@@ -220,6 +220,13 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                   ))}
                 </TextField>
                 <TextField label="โน้ต (ไม่บังคับ)" value={note} onChange={(e) => setNote(e.target.value)} size="small" multiline minRows={2} slotProps={{ htmlInput: { maxLength: 500 } }} />
+                {classification === 'income' && detail.direction === 'credit' && (
+                  <Alert severity="info">
+                    ถ้ารายการนี้คือเงินเดือนหรือรายได้ประจำ แนะนำให้บันทึกผ่าน "รายได้เต็ม" ในหน้าวางแผนรายเดือนแทน
+                    (แยก Gross ก่อนหักประกันสังคม/ภาษีหัก ณ ที่จ่ายให้อัตโนมัติ และจะขึ้น "เงินได้จากงานประจำ" ในหน้าภาษีเอง) —
+                    Tax Treatment ด้านล่างมีไว้สำหรับรายได้/รายจ่ายธุรกิจอื่นที่ไม่ผ่านระบบวางแผนเท่านั้น
+                  </Alert>
+                )}
                 <TextField
                   select
                   label="Tax Entity"
