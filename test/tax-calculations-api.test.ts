@@ -374,6 +374,98 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     assert.equal(body.inputs.withholdingSatang, 1000000, 'withholding ต้องรวมทั้งสองแถว');
   });
 
+  // ผู้ใช้ส่วนใหญ่มี Tax Entity เดียว — ไม่ควรบังคับให้ไปตั้ง default ที่หน้าบัญชีก่อนตัวเลขถึงจะขึ้น
+  await t.test('มี Tax Entity เดียว → ธุรกรรม/รายได้ที่ไม่ได้ผูก entity ไว้ต้องตกมาที่ entity นั้นเอง', async () => {
+    const soloUser = (
+      await db.pool.query<{ id: number }>(
+        `insert into app_user (google_sub, email, display_name, is_admin, status)
+         values ('google-sub-tax8-solo', 'tax8-solo@example.com', 'Tax8 Solo', false, 'approved') returning id`,
+      )
+    ).rows[0]!.id;
+    const soloEmail = (
+      await db.pool.query<{ id: number }>(
+        `insert into email_account (user_id, email, refresh_token_enc) values ($1, 'tax8-solo@example.com', 'enc:x') returning id`,
+        [soloUser],
+      )
+    ).rows[0]!.id;
+    // บัญชีนี้ "ไม่ได้ตั้ง" default_tax_entity_id ไว้เลย และธุรกรรมก็ไม่ได้ override entity
+    const soloAccount = (
+      await db.pool.query<{ id: number }>(
+        `insert into bank_account (user_id, bank_id, email_account_id, nickname, account_number, pdf_password_enc)
+         values ($1, $2, $3, 'บัญชีเดียว', 'xxx-x-x7777-x', 'enc:pw') returning id`,
+        [soloUser, bankId, soloEmail],
+      )
+    ).rows[0]!.id;
+    const soloStatement = (
+      await db.pool.query<{ id: number }>(
+        `insert into statement (bank_account_id, gmail_message_id, gmail_attachment_id, period_start, period_end, status)
+         values ($1, 'gmail-solo', 'att-solo', '2026-01-01', '2026-12-31', 'parsed') returning id`,
+        [soloAccount],
+      )
+    ).rows[0]!.id;
+    const soloEntity = (
+      await db.pool.query<{ id: number }>(
+        `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'คนเดียว') returning id`,
+        [soloUser],
+      )
+    ).rows[0]!.id;
+
+    const soloTxn = (
+      await db.pool.query<{ id: number }>(
+        `insert into txn (statement_id, bank_account_id, txn_date, description, amount_satang, direction, running_balance_satang)
+         values ($1, $2, '2026-06-01', 'ค่าจ้างฟรีแลนซ์', 7000000, 'credit', 9000000) returning id`,
+        [soloStatement, soloAccount],
+      )
+    ).rows[0]!.id;
+    await db.pool.query(
+      `insert into txn_annotation (txn_id, classification, review_status, tax_treatment) values ($1, 'income', 'reviewed', 'business_income')`,
+      [soloTxn],
+    );
+
+    // income_record ที่ไม่ได้ผูกบัญชีเลย ก็ต้อง resolve มาที่ entity เดียวนี้ ไม่ใช่ตกไปเป็น unresolved
+    const soloPlan = (
+      await db.pool.query<{ id: number }>(`insert into monthly_plan (user_id, month_start) values ($1, '2026-06-01') returning id`, [soloUser])
+    ).rows[0]!.id;
+    const soloItem = (
+      await db.pool.query<{ id: number }>(
+        `insert into monthly_plan_item (monthly_plan_id, kind, name, planned_amount_satang) values ($1, 'income', 'เงินเดือน', 4000000) returning id`,
+        [soloPlan],
+      )
+    ).rows[0]!.id;
+    await db.pool.query(
+      `insert into income_record (user_id, monthly_plan_id, monthly_plan_item_id, name, gross_amount_satang, expected_net_satang, income_date)
+       values ($1, $2, $3, 'เงินเดือน', 4000000, 4000000, '2026-06-25')`,
+      [soloUser, soloPlan, soloItem],
+    );
+
+    const soloApp = await listen(appFor(soloUser));
+    t.after(soloApp.close);
+    const res = await soloApp.request(`/api/tax/2026/summary?tax_entity_id=${soloEntity}`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.equal(body.inputs.otherIncomeSatang, 7000000, 'ธุรกรรมที่ไม่ได้ผูก entity ต้องตกมาที่ entity เดียวที่มี');
+    assert.equal(body.inputs.employmentIncomeSatang, 4000000, 'income_record ที่ไม่ได้ผูกบัญชีก็ต้อง resolve ได้');
+    assert.equal(body.inputs.unresolvedIncomeSatang, 0, 'ไม่ควรเหลือรายได้ที่ resolve ไม่ได้อีก');
+
+    // drill-down ต้องยังตรงกับการ์ดเป๊ะ (fallback ต้องอยู่ใน fragment ร่วม ไม่ใช่แค่ฝั่งคำนวณ)
+    const qs = new URLSearchParams(body.drilldown_params.other_income as Record<string, string>).toString();
+    const drill = await soloApp.request(`/api/transactions?${qs}`);
+    const drillBody = (await drill.json()) as { rows: { amount_satang: number }[] };
+    assert.equal(drillBody.rows.reduce((s, r) => s + r.amount_satang, 0), 7000000);
+  });
+
+  // ผู้ใช้ที่มีหลาย entity ต้องไม่เปลี่ยนพฤติกรรม — ของที่ไม่ได้ผูกไว้ต้องไม่ถูกเดาให้
+  await t.test('มีหลาย Tax Entity → ธุรกรรมที่ไม่ได้ผูก entity ต้องไม่ถูกเดาเข้า entity ใดเลย', async () => {
+    const unlinkedTxn = await insertTxn(1234500, 'credit', '2026-09-09');
+    await annotate(unlinkedTxn, 'business_income');
+    // userA มีสอง entity (entityA + entityCompany) และบัญชีนี้ default = entityA อยู่แล้ว จึงต้องเข้า entityA ตามเดิม
+    const res = await app.request(`/api/tax/2026/summary?tax_entity_id=${entityCompany}`);
+    const body = (await res.json()) as any;
+    assert.equal(body.inputs.otherIncomeSatang, 0, 'บริษัทต้องไม่ได้รับยอดของบัญชีที่ผูกกับบุคคลธรรมดา');
+    await db.pool.query('delete from txn_annotation where txn_id = $1', [unlinkedTxn]);
+    await db.pool.query('delete from txn where id = $1', [unlinkedTxn]);
+  });
+
   await t.test('ownership: tax_entity ของคนอื่นเข้าไม่ได้ (403/404) — ครบทุก endpoint ใหม่', async () => {
     const userB = (
       await db.pool.query<{ id: number }>(

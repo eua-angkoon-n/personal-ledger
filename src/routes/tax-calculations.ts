@@ -3,7 +3,7 @@ import { requireUser } from '../auth.js';
 import { pool, query, tx } from '../db.js';
 import { HttpError, id, optionalStr, pathId, satang, str, type Body } from '../http.js';
 import { audit } from '../services/audit.js';
-import { EFFECTIVE_TAX_ENTITY_SQL } from '../services/report-query.js';
+import { EFFECTIVE_TAX_ENTITY_SQL, soleTaxEntitySql } from '../services/report-query.js';
 import { estimateTax, type TaxEstimate, type TaxInput } from '../services/tax-calculation.js';
 import { resolveRuleSet } from '../services/tax-rules.js';
 import { assertOwnsTaxEntity } from './tax-entities.js';
@@ -44,6 +44,11 @@ type AggregatedInputs = {
   unresolvedIncomeSatang: number; // income_record ที่ resolve entity ไม่ได้ (bank_account_id เป็น null)
 };
 
+// entity ของ income_record: ไม่มีคอลัมน์ของตัวเอง (§7.4) — resolve ผ่านบัญชีปลายทาง แล้วตกมาที่
+// "entity เดียวในระบบ" เป็นชั้นสุดท้ายเหมือน EFFECTIVE_TAX_ENTITY_SQL ของฝั่ง txn
+// left join ไม่ใช่ join: income_record ที่ bank_account_id เป็น null ต้องยังมีสิทธิ์ resolve ผ่านชั้นสุดท้าย
+const INCOME_TAX_ENTITY_SQL = `coalesce(ba.default_tax_entity_id, ${soleTaxEntitySql('ir.user_id')})`;
+
 // ปี "ตรง" ของ txn ใช้ extract(year from txn_date) ตรง ๆ ได้เพราะ txn_date เป็น calendar date ล้วน
 // (ต่างจาก income_record ที่ปีอาจว่าง ต้อง coalesce กับ month_start ของแผน — ดู query ด้านล่าง)
 async function aggregateTaxInputs(userId: number, taxEntityId: number, taxYearCE: number): Promise<AggregatedInputs> {
@@ -55,14 +60,14 @@ async function aggregateTaxInputs(userId: number, taxEntityId: number, taxYearCE
       `select
          (select coalesce(sum(ir.gross_amount_satang), 0) from income_record ir
           join monthly_plan mp on mp.id = ir.monthly_plan_id
-          join bank_account ba on ba.id = ir.bank_account_id
-          where ir.user_id = $1 and ba.default_tax_entity_id = $2
+          left join bank_account ba on ba.id = ir.bank_account_id
+          where ir.user_id = $1 and ${INCOME_TAX_ENTITY_SQL} = $2
             and extract(year from coalesce(ir.income_date, mp.month_start)) = $3)::bigint as gross,
          (select coalesce(sum(d.amount_satang), 0) from income_deduction d
           join income_record ir on ir.id = d.income_record_id
           join monthly_plan mp on mp.id = ir.monthly_plan_id
-          join bank_account ba on ba.id = ir.bank_account_id
-          where d.deduction_type = 'withholding_tax' and ir.user_id = $1 and ba.default_tax_entity_id = $2
+          left join bank_account ba on ba.id = ir.bank_account_id
+          where d.deduction_type = 'withholding_tax' and ir.user_id = $1 and ${INCOME_TAX_ENTITY_SQL} = $2
             and extract(year from coalesce(ir.income_date, mp.month_start)) = $3)::bigint as withholding`,
       [userId, taxEntityId, taxYearCE],
     ),
@@ -93,10 +98,14 @@ async function aggregateTaxInputs(userId: number, taxEntityId: number, taxYearCE
        where user_id = $1 and tax_entity_id = $2 and tax_year = $3`,
       [userId, taxEntityId, taxYearCE],
     ),
+    // resolve entity ไม่ได้จริง ๆ เท่านั้นถึงนับเป็น unresolved — ไม่ใช่แค่ "bank_account_id เป็น null"
+    // เพราะตอนนี้ผู้ใช้ที่มี entity เดียวจะ resolve ผ่านชั้นสุดท้ายได้แม้ไม่ได้ผูกบัญชี
     query<{ total: number }>(
       `select coalesce(sum(ir.gross_amount_satang), 0)::bigint as total
-       from income_record ir join monthly_plan mp on mp.id = ir.monthly_plan_id
-       where ir.user_id = $1 and ir.bank_account_id is null
+       from income_record ir
+       join monthly_plan mp on mp.id = ir.monthly_plan_id
+       left join bank_account ba on ba.id = ir.bank_account_id
+       where ir.user_id = $1 and ${INCOME_TAX_ENTITY_SQL} is null
          and extract(year from coalesce(ir.income_date, mp.month_start)) = $2`,
       [userId, taxYearCE],
     ),
@@ -129,8 +138,8 @@ async function employmentIncomeRecords(userId: number, taxEntityId: number, taxY
     `select ir.id, ir.name, ir.income_date, ir.gross_amount_satang, mp.month_start
      from income_record ir
      join monthly_plan mp on mp.id = ir.monthly_plan_id
-     join bank_account ba on ba.id = ir.bank_account_id
-     where ir.user_id = $1 and ba.default_tax_entity_id = $2
+     left join bank_account ba on ba.id = ir.bank_account_id
+     where ir.user_id = $1 and ${INCOME_TAX_ENTITY_SQL} = $2
        and extract(year from coalesce(ir.income_date, mp.month_start)) = $3
      order by coalesce(ir.income_date, mp.month_start)`,
     [userId, taxEntityId, taxYearCE],

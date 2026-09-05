@@ -23,9 +23,22 @@ export const EFFECTIVE_REVIEW_STATUS_SQL = "coalesce(an.review_status, 'reviewed
 // แต่ list ธุรกรรม (TXN_FILTER_SQL) ต้องไม่ใช้ตัวนี้ ผู้ใช้ต้องยังเห็น internal transfer ในตารางได้ (§8.3/§8.4)
 export const EXCLUDED_FROM_FLOW_SQL = `(${IS_INTERNAL_TRANSFER_SQL} or coalesce(an.classification, '') = 'excluded')`;
 
+/**
+ * "ผู้ใช้มี Tax Entity ที่ใช้งานอยู่แค่ตัวเดียว → คืน id ของตัวนั้น ไม่งั้นคืน NULL"
+ *
+ * `having count(*) = 1` บน aggregate ที่ไม่มี GROUP BY: ถ้าไม่ตรงเงื่อนไขจะไม่คืนแถวเลย
+ * scalar subquery จึงได้ NULL — ผู้ใช้ที่มีหลาย entity พฤติกรรมเหมือนเดิมทุกอย่าง
+ */
+export function soleTaxEntitySql(userIdCol: string): string {
+  return `(select max(e.id) from tax_entity e where e.user_id = ${userIdCol} and e.is_active having count(*) = 1)`;
+}
+
 // entity ที่มีผลจริงต่อธุรกรรมนี้ — override ต่อรายการถ้ามี ไม่งั้นใช้ default ของบัญชี (§10.1, Slice 7)
-// Slice 8 (คำนวณภาษี) ใช้ตัวนี้ตัดสิน entity เจ้าของยอด ไม่ใช่สร้างกลไกนี้ใหม่
-export const EFFECTIVE_TAX_ENTITY_SQL = 'coalesce(an.tax_entity_id, a.default_tax_entity_id)';
+// ชั้นสุดท้าย: มี entity เดียวทั้งระบบก็ไม่ต้องบังคับให้ผู้ใช้ไปตั้ง default ที่หน้าบัญชีก่อน — ไม่มีอะไรให้เลือกผิดได้
+// ต้องอยู่ใน fragment ร่วมตัวนี้เท่านั้น ไม่ใช่แยกเขียนที่ tax-calculations.ts เพราะ filter ของ
+// GET /api/transactions ใช้ตัวเดียวกัน ถ้าสองที่ไม่ตรงกัน drill-down จากการ์ดภาษีจะได้คนละชุดทันที
+export const EFFECTIVE_TAX_ENTITY_SQL =
+  `coalesce(an.tax_entity_id, a.default_tax_entity_id, ${soleTaxEntitySql('a.user_id')})`;
 
 export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
