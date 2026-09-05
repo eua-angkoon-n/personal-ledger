@@ -18,7 +18,7 @@ import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded';
 import DownloadRounded from '@mui/icons-material/DownloadRounded';
 import { patch, put, req, type TaxDocumentDetail, type TaxEntity, type TxnListResponse } from '../api.js';
 import MonthPicker, { currentMonth } from './MonthPicker.js';
-import { formatDate } from '../format.js';
+import { formatBaht, formatDate, parseBahtToSatang } from '../format.js';
 import { dataTextSx } from '../theme.js';
 import { DOCUMENT_TYPE_LABEL } from '../taxDocumentLabels.js';
 import { LoadError, type Notice } from '../ui.js';
@@ -51,6 +51,7 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
   const [savingLinks, setSavingLinks] = useState(false);
   const [searchMonth, setSearchMonth] = useState(currentMonth());
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchAmount, setSearchAmount] = useState('');
   const [searchResults, setSearchResults] = useState<TxnListResponse['rows']>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -65,6 +66,8 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
       if (requestId !== requestIdRef.current) return;
       setDetail(d);
       setLinks(detailToLinkRows(d));
+      // ยอดที่จ่ายมักตรงกับยอดรวมของเอกสารเป๊ะ — ตั้งค่าช่องค้นหาให้เลยเพื่อกดค้นหาได้ทันที
+      setSearchAmount(formatBaht(d.total_satang));
     } catch (e) {
       if (requestId !== requestIdRef.current) return;
       setError(e instanceof Error ? e.message : 'โหลดรายละเอียดไม่สำเร็จ');
@@ -75,7 +78,7 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
 
   useEffect(() => {
     if (docId != null) void load(docId);
-    else { setDetail(null); setSearchResults([]); setSearchQuery(''); setSearched(false); }
+    else { setDetail(null); setSearchResults([]); setSearchQuery(''); setSearchAmount(''); setSearched(false); }
   }, [docId]);
 
   const taxEntityName = taxEntities.find((e) => e.id === detail?.tax_entity_id)?.display_name ?? '—';
@@ -103,6 +106,12 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
     try {
       const q = new URLSearchParams({ month: searchMonth, limit: '25' });
       if (searchQuery.trim()) q.set('q', searchQuery.trim());
+      // ยอดที่จ่ายตรงกับยอดธุรกรรมเป๊ะเสมอ (สตางค์ต่อสตางค์) ค้นด้วยยอดแม่นกว่าค้นด้วยคำอธิบายที่ statement มักส่งมาว่าง/กำกวม
+      const amountSatang = searchAmount.trim() ? parseBahtToSatang(searchAmount) : null;
+      if (amountSatang != null) {
+        q.set('min_satang', String(amountSatang));
+        q.set('max_satang', String(amountSatang));
+      }
       const result = await req<TxnListResponse>(`/api/transactions?${q}`);
       setSearchResults(result.rows);
       setSearched(true);
@@ -225,6 +234,17 @@ export default function TaxDocumentDrawer({ docId, taxEntities, onClose, onSaved
               <Typography variant="body2" sx={{ fontWeight: 650, mb: 1 }}>ค้นหาธุรกรรมเพื่อเพิ่ม</Typography>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1 }}>
                 <MonthPicker value={searchMonth} onChange={setSearchMonth} />
+                <TextField
+                  size="small"
+                  label="จำนวนเงิน (บาท)"
+                  value={searchAmount}
+                  onChange={(e) => setSearchAmount(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void runSearch(); }}
+                  error={searchAmount.trim() !== '' && parseBahtToSatang(searchAmount) == null}
+                  helperText={searchAmount.trim() !== '' && parseBahtToSatang(searchAmount) == null ? 'รูปแบบไม่ถูกต้อง' : undefined}
+                  slotProps={{ htmlInput: { inputMode: 'decimal', sx: dataTextSx } }}
+                  sx={{ width: 160 }}
+                />
                 <TextField
                   size="small"
                   label="ค้นหา (ชื่อรายการ)"
