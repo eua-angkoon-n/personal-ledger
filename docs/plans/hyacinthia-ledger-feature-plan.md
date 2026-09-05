@@ -1032,25 +1032,29 @@ Migration ปัจจุบันสิ้นสุดที่ `004_statement_
 - Monthly item payment
 - Monthly close snapshot
 
-### `007_income_and_installments.sql`
+### `007_kbank_statement_parser.sql`
+
+- Seed แถว bank สำหรับ KBank (ไม่อยู่ในแผนเดิม แทรกก่อน Slice 6 ทำให้เลข migration ของทุก slice ถัดจากนี้เลื่อน +1)
+
+### `008_income_and_installments.sql`
 
 - Income record
 - Income deduction
 - Installment plan
 - Installment due
 
-### `008_tax_document_vault.sql`
+### `009_tax_document_vault.sql`
 
 - Tax entity
 - Tax document
 - Tax document transaction link
 - File fingerprint
+- Audit log (เลื่อนมาจาก `010` เพราะ "ดาวน์โหลดเอกสารภาษี" ต้องถูก log ตั้งแต่ Slice 7 — §7.6)
 
-### `009_tax_calculation_and_audit.sql`
+### `010_tax_calculation_and_audit.sql`
 
 - Tax deduction claim
 - Tax calculation snapshot
-- Audit log
 
 แต่ละ Migration ต้องมี Roll-forward Test บนฐานข้อมูลใหม่และฐานข้อมูลที่มีข้อมูลเดิม
 

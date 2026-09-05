@@ -1,6 +1,6 @@
 # Slice 6 — Income และ Installment
 
-> สถานะ: รอ Slice 5 เสร็จก่อน
+> สถานะ: เสร็จแล้ว
 > อ้างอิง §7.3 "Installment", §7.4 "Income และ Payroll Deduction", §14 "Slice 6"
 > ของ `docs/plans/hyacinthia-ledger-feature-plan.md`
 
@@ -10,7 +10,8 @@
 
 ## Migration
 
-`007_income_and_installments.sql` — `income_record`, `income_deduction`, `installment_plan`, `installment_due`
+`008_income_and_installments.sql` — `income_record`, `income_deduction`, `installment_plan`, `installment_due`
+(เลข migration เลื่อนจาก `007` เป็น `008` เพราะ `007_kbank_statement_parser.sql` แทรกเข้ามาก่อนโดยไม่อยู่ในแผนเดิม)
 (รายละเอียดคอลัมน์เต็มใน §7.3–7.4)
 
 ## งาน (§14)

@@ -10,6 +10,8 @@ import { incomeRecordsRouter } from './routes/income-records.js';
 import { installmentsRouter } from './routes/installments.js';
 import { recurringRulesRouter } from './routes/recurring-rules.js';
 import { reportsRouter } from './routes/reports.js';
+import { taxDocumentsRouter } from './routes/tax-documents.js';
+import { taxEntitiesRouter } from './routes/tax-entities.js';
 import { transactionsRouter } from './routes/transactions.js';
 import { transferMatchesRouter } from './routes/transfer-matches.js';
 
@@ -40,3 +42,5 @@ api.use(recurringRulesRouter);
 api.use(monthlyPlansRouter);
 api.use(incomeRecordsRouter);
 api.use(installmentsRouter);
+api.use(taxEntitiesRouter);
+api.use(taxDocumentsRouter);

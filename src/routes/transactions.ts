@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireUser } from '../auth.js';
 import { query, tx } from '../db.js';
 import { HttpError, id, optionalStr, pathId, str, type Body } from '../http.js';
+import { assertOwnsTaxEntity } from './tax-entities.js';
 import {
   EFFECTIVE_CLASSIFICATION_SQL,
   EFFECTIVE_REVIEW_STATUS_SQL,
@@ -75,9 +76,10 @@ transactionsRouter.get('/transactions/:id', requireUser(async (req, res, user) =
     `select t.id, t.txn_date, t.txn_time, t.description, t.channel, t.amount_satang, t.direction,
             t.running_balance_satang, t.is_internal_transfer, t.created_at,
             a.id as bank_account_id, a.nickname as account_nickname, a.account_purpose,
+            a.default_tax_entity_id as account_default_tax_entity_id,
             b.id as bank_id, b.name as bank_name,
             ${EFFECTIVE_CLASSIFICATION_SQL} as classification, ${EFFECTIVE_REVIEW_STATUS_SQL} as review_status,
-            an.note as annotation_note,
+            an.note as annotation_note, an.tax_entity_id,
             st.id as statement_id, st.period_start, st.period_end
      from txn t
      join bank_account a on a.id = t.bank_account_id
@@ -135,17 +137,27 @@ transactionsRouter.patch('/transactions/:id/annotation', requireUser(async (req,
   }
   const note = optionalStr(b, 'note', 500);
 
+  // §10.1: transaction override tax entity ของ bank account ได้ — ไม่ส่ง field นี้มา = ไม่แตะค่าเดิม
+  // (ต่างจาก classification/note ที่ resend ทุกครั้งอยู่แล้ว) ส่ง null มาตรง ๆ = ล้าง override กลับไปใช้ default ของบัญชี
+  const taxEntityIdProvided = Object.prototype.hasOwnProperty.call(b, 'tax_entity_id');
+  let taxEntityId: number | null = null;
+  if (taxEntityIdProvided && b.tax_entity_id != null) {
+    taxEntityId = id(b, 'tax_entity_id');
+    await assertOwnsTaxEntity(user.id, taxEntityId);
+  }
+
   const { rows } = await query(
-    `insert into txn_annotation (txn_id, classification, note, review_status, reviewed_at, updated_at)
-     values ($1, $2, $3, 'reviewed', now(), now())
+    `insert into txn_annotation (txn_id, classification, note, tax_entity_id, review_status, reviewed_at, updated_at)
+     values ($1, $2, $3, $4, 'reviewed', now(), now())
      on conflict (txn_id) do update set
        classification = excluded.classification,
        note = excluded.note,
+       tax_entity_id = case when $5 then excluded.tax_entity_id else txn_annotation.tax_entity_id end,
        review_status = 'reviewed',
        reviewed_at = now(),
        updated_at = now()
      returning *`,
-    [txnId, classification, note],
+    [txnId, classification, note, taxEntityId, taxEntityIdProvided],
   );
   res.json(rows[0]);
 }));

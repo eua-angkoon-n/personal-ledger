@@ -1,11 +1,11 @@
-# สถานะงาน — 2026-09-04
+# สถานะงาน — 2026-09-05
 
 ข้อบังคับและท่อข้อมูลอยู่ที่ `CONTEXT.md` · การตัดสินใจอยู่ที่ `docs/adr/0001-statement-pdf-ingestion.md`
 และ `docs/adr/0002-imported-transactions-monthly-planning-and-reconciliation.md`
 
 ## Git
 
-- 12 commit บน `master`, ล่าสุด `c147a68 feat: rebrand to Hyacinthia Ledger and promote accounts nav`
+- บน `master`, ล่าสุดถึง Slice 7 (Tax Document Vault) — ดูรายละเอียดที่ section ของแต่ละ Slice ด้านล่าง
 - หลัง Slice 1–3 มีงาน rebrand เป็น "Hyacinthia Ledger" และ redesign หน้าเว็บทั้งหมดด้วย MUI
   (โฟลเดอร์/`package.json` ยังชื่อ `family-ledger` — ยังไม่ได้ตามรีเนม)
 - PDF, `.eml`, `.env` และ `data/` ถูก ignore ไม่เข้า git
@@ -228,12 +228,53 @@
 - `copy-previous` กันซ้ำด้วย `(kind, name)` เท่านั้น เดือนก่อนมีสองรายการชื่อเดียวกันจะ copy มาใบเดียว
 - รายการประจำความถี่ `day` interval 1 สร้าง ~30 แถวต่อเดือนตามสเปก ไม่มีเพดานจำนวนแถวต่อเดือน
 - ยังไม่มี endpoint ลบ `recurring_rule` (archive เท่านั้น) และไม่มี unarchive ทั้งของ rule และ bank account
-- ถัดไป: Slice 6 (Income & Installment) ตามลำดับใน `docs/plans/phases/README.md`
 
-## Requirement ที่ยังไม่มี Slice รองรับ (ก่อน 4A)
+## Slice 6 — Income & Installment: เสร็จแล้ว
 
-- Tax Invoice / `TaxInvoiceRecord` (Slice 7)
-- audit log การเข้าถึงและแก้ไขข้อมูล (Slice 8)
+- Migration `008_income_and_installments.sql` — `income_record`, `income_deduction`, `installment_plan`, `installment_due`
+  (เลื่อนจาก `007` เพราะ `007_kbank_statement_parser.sql` แทรกก่อนโดยไม่อยู่ในแผนเดิม)
+- ผูก income record เข้ากับ monthly plan item เดิม, จับคู่ยอดสุทธิกับ deposit จริงอัตโนมัติเมื่อยอดตรง
+- Installment plan คำนวณงวด (anchor date, เงินดาวน์, เศษงวดสุดท้าย) และผูก due เข้า monthly plan item
+  ผ่าน `monthly_plan_item_installment_due_fk` ที่ใส่ FK ทีหลังตาม precedent การเลื่อน FK ข้ามสไลซ์
+- หน้า `Installments.tsx` + `IncomeSection.tsx` ใน web
+- `npm run test:db` ผ่านทั้งหมด (140 ก่อนเริ่ม Slice 7)
+
+## Slice 7 — Tax Document Vault: เสร็จแล้ว
+
+- Migration `009_tax_document_vault.sql` — `tax_entity`, `tax_document`, `tax_document_txn_link`, `audit_log`
+  (สร้าง `audit_log` ที่นี่ไม่ใช่ Slice 8 เพราะ DoD ของสไลซ์นี้ต้องการ audit การดาวน์โหลด — ดูรายละเอียด
+  ในหมายเหตุของ `docs/plans/phases/7-tax-document-vault.md`) รวมถึง `bank_account.default_tax_entity_id`
+  และ FK `txn_annotation.tax_entity_id` ที่เลื่อนมาจาก migration 005
+- Buffer เข้ารหัสไฟล์ (`encryptBuffer`/`decryptBuffer` ใน `src/crypto.ts`) คู่กับของสตริงเดิม — ไฟล์บนดิสก์
+  เป็น `iv|tag|ciphertext` ดิบ เก็บไว้ที่ `TAX_DOC_STORAGE_DIR` (default `./data/tax-docs`) แยกจาก `PDF_STORAGE_DIR`
+- Upload ผ่าน base64 ใน JSON ไม่ใช่ multipart (ไม่เพิ่ม dependency) — ต้อง mount
+  `express.json({limit:'15mb'})` ที่ `/api/tax-documents` **ก่อน** ตัวจำกัด 100kb ทั่วไปใน `server.ts`
+  เพดานไฟล์จริงหลัง decode คือ 10MB (route บังคับเอง)
+- Dedup ด้วย SHA-256 ของ plaintext ก่อนเข้ารหัส ต่อ user (คนละคนถือใบเสร็จใบเดียวกันได้)
+- Authorization ทุกครั้งก่อนเปิดไฟล์ (`user_id` ตรง ไม่มีข้อยกเว้นให้ admin) และ log
+  `tax_document.download` ก่อน commit เสมอก่อนส่งไบต์ออก — log ล้ม = ไม่ได้ไฟล์
+- §10.1 "Personal/Business Account Mapping" ครบทั้งสองฝั่ง: `bank_account.default_tax_entity_id` (ตั้งใน
+  `Accounts.tsx`) และ `PATCH /transactions/:id/annotation` รับ `tax_entity_id` เพื่อ override ต่อธุรกรรมได้
+  (ไม่ส่ง field มา = ไม่แตะค่าเดิม ต่างจาก classification/note ที่ full-replace ทุกครั้ง — ดู comment ใน
+  `src/routes/transactions.ts`) — Slice 8 (Tax Calculation) มีหน้าที่ *ใช้* ค่านี้ตัดสิน entity ต่อธุรกรรม
+  ตอนคำนวณภาษี ไม่ใช่สร้างกลไกนี้
+- Gmail Attachment Selection ใช้ `listMessages`/`listAttachments` ที่ generalize มาจาก
+  `listMessagesFromSender`/`pickPdfAttachments` เดิมของ worker (พฤติกรรม worker ไม่เปลี่ยน)
+- หน้า `TaxDocuments.tsx` + `TaxDocumentDrawer`/`TaxDocumentUploadModal`/`GmailAttachmentPicker`
+  ใน web, จัดการ Tax Entity ในหน้า `Accounts.tsx`
+- `npm run test:db` ผ่านทั้งหมด 161 เทสต์ (รวม `test/tax-documents.test.ts` ใหม่ และเคส cross-user
+  ใน `test/authz.test.ts` ตาม ADR-0002 ข้อ 7)
+- **ยังไม่เคยเปิดดูในเบราว์เซอร์จริง** เหมือนทุกเฟสก่อนหน้า — environment นี้ไม่มี browser automation
+  ยืนยันได้แค่ `npm run test:db` + `npm run build` (typecheck ทั้ง backend/web + vite build ผ่าน) ไม่ยืนยัน
+  layout, การอัปโหลดไฟล์จริงผ่าน `<input type="file">`, หรือ flow การเลือกไฟล์แนบจาก Gmail จริง
+- ถัดไป: Slice 8 (Tax Calculation) ตามลำดับใน `docs/plans/phases/README.md`
+
+## Requirement ที่ยังไม่มี Slice รองรับ
+
+- Text extraction / OCR / duplicate suggestion สำหรับเอกสารภาษี (§10.3 "ระยะหลัง")
+- `audit_log` มีตารางและ 2 action แล้ว (`tax_document.download`, `tax_document.link_txn`) แต่ยังไม่มี
+  call site อีก 7 อย่างตาม §7.6 (แก้ category, confirm/cancel transfer, mark paid, แก้ plan, แก้ installment,
+  แก้ค่าลดหย่อน, archive บัญชี) และยังไม่มี API อ่าน — Slice 8
 
 ## UI design guideline — ปิดแล้ว
 

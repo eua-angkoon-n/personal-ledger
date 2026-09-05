@@ -43,20 +43,27 @@ export async function getProfile(accessToken: string): Promise<{ historyId: stri
   return (await res.json()) as { historyId: string };
 }
 
-export async function listMessagesFromSender(accessToken: string, senderEmail: string): Promise<string[]> {
+/** maxPages จำกัดไว้ให้ tax document picker (ผู้ใช้รอผลสด ๆ) ไม่ต้องไล่ทั้งกล่องเหมือน sync พื้นหลัง */
+export async function listMessages(accessToken: string, q: string, opts: { maxPages?: number } = {}): Promise<string[]> {
   const ids: string[] = [];
   let pageToken: string | undefined;
+  let page = 0;
   do {
     const url = new URL(`${GMAIL_BASE}/messages`);
-    url.searchParams.set('q', `from:${senderEmail}`);
+    url.searchParams.set('q', q);
     if (pageToken) url.searchParams.set('pageToken', pageToken);
     const res = await fetch(url, { headers: authHeaders(accessToken) });
     if (!res.ok) throw new Error(`gmail messages.list ล้มเหลว: ${res.status}`);
     const body = (await res.json()) as { messages?: { id: string }[]; nextPageToken?: string };
     for (const m of body.messages ?? []) ids.push(m.id);
     pageToken = body.nextPageToken;
-  } while (pageToken);
+    page++;
+  } while (pageToken && (opts.maxPages == null || page < opts.maxPages));
   return ids;
+}
+
+export function listMessagesFromSender(accessToken: string, senderEmail: string): Promise<string[]> {
+  return listMessages(accessToken, `from:${senderEmail}`);
 }
 
 /** startHistoryId เก่าเกินไป → โยน GmailHistoryStaleError ให้ผู้เรียกถอยไป full sync */
@@ -168,19 +175,31 @@ export function dkimPasses(headers: GmailHeader[], senderDomain: string): boolea
 }
 
 export type GmailAttachment = { attachmentId: string; filename: string };
+export type GmailAttachmentCandidate = { attachmentId: string; filename: string; mimeType: string; size: number };
 
-/** SCB ส่ง PDF เป็น octet-stream และอีเมลย้อนหลังแนบหลายเดือน — คืนทุกไฟล์ที่ชื่อและ MIME ตรงเงื่อนไข */
-export function pickPdfAttachments(payload: GmailPayload, filenamePattern: string): GmailAttachment[] {
-  const re = new RegExp(filenamePattern);
-  const found: GmailAttachment[] = [];
+/** เดินทุก part หา attachment ทั้งหมดไม่กรอง mimetype/ชื่อ — ฐานให้ pickPdfAttachments กรองต่อ และให้ tax document picker ใช้ตรง ๆ */
+export function listAttachments(payload: GmailPayload): GmailAttachmentCandidate[] {
+  const found: GmailAttachmentCandidate[] = [];
 
   function walk(part: GmailPayload): void {
-    const pdfMime = part.mimeType === 'application/pdf' || part.mimeType === 'application/octet-stream';
-    if (pdfMime && part.filename && part.body?.attachmentId && re.test(part.filename)) {
-      found.push({ attachmentId: part.body.attachmentId, filename: part.filename });
+    if (part.filename && part.body?.attachmentId) {
+      found.push({
+        attachmentId: part.body.attachmentId,
+        filename: part.filename,
+        mimeType: part.mimeType ?? 'application/octet-stream',
+        size: part.body.size ?? 0,
+      });
     }
     for (const p of part.parts ?? []) walk(p);
   }
   walk(payload);
   return found;
+}
+
+/** SCB ส่ง PDF เป็น octet-stream และอีเมลย้อนหลังแนบหลายเดือน — คืนทุกไฟล์ที่ชื่อและ MIME ตรงเงื่อนไข */
+export function pickPdfAttachments(payload: GmailPayload, filenamePattern: string): GmailAttachment[] {
+  const re = new RegExp(filenamePattern);
+  return listAttachments(payload)
+    .filter((a) => (a.mimeType === 'application/pdf' || a.mimeType === 'application/octet-stream') && re.test(a.filename))
+    .map((a) => ({ attachmentId: a.attachmentId, filename: a.filename }));
 }

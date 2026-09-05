@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import FilterListRounded from '@mui/icons-material/FilterListRounded';
 import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded';
-import { req, type Account, type Bank, type Category, type TxnListResponse } from '../api.js';
+import { req, type Account, type Bank, type Category, type TaxEntity, type TxnListResponse } from '../api.js';
 import MonthPicker, { currentMonth } from '../components/MonthPicker.js';
 import ReviewDrawer from '../components/ReviewDrawer.js';
 import TransactionTable from '../components/TransactionTable.js';
@@ -29,6 +29,7 @@ export default function Transactions() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [banks, setBanks] = useState<Bank[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [taxEntities, setTaxEntities] = useState<TaxEntity[]>([]);
   const [data, setData] = useState<TxnListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -74,14 +75,16 @@ export default function Transactions() {
 
   useEffect(() => {
     void (async () => {
-      const [accountsResult, banksResult, categoriesResult] = await Promise.allSettled([
+      const [accountsResult, banksResult, categoriesResult, taxEntitiesResult] = await Promise.allSettled([
         req<Account[]>('/api/accounts'),
         req<Bank[]>('/api/banks'),
         req<Category[]>('/api/categories?is_active=true'),
+        req<TaxEntity[]>('/api/tax-entities'),
       ]);
       if (accountsResult.status === 'fulfilled') setAccounts(accountsResult.value);
       if (banksResult.status === 'fulfilled') setBanks(banksResult.value);
       if (categoriesResult.status === 'fulfilled') setCategories(categoriesResult.value);
+      if (taxEntitiesResult.status === 'fulfilled') setTaxEntities(taxEntitiesResult.value);
     })();
   }, []);
 
@@ -288,6 +291,7 @@ export default function Transactions() {
       <ReviewDrawer
         txnId={selectedTxnId}
         categories={categories}
+        taxEntities={taxEntities}
         onClose={() => setSelectedTxnId(null)}
         onSaved={() => void reload(true)}
         onNotice={setNotice}

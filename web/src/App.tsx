@@ -26,6 +26,7 @@ import HourglassTopRounded from '@mui/icons-material/HourglassTopRounded';
 import LoginRounded from '@mui/icons-material/LoginRounded';
 import LogoutRounded from '@mui/icons-material/LogoutRounded';
 import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded';
+import ReceiptRounded from '@mui/icons-material/ReceiptRounded';
 import SettingsRounded from '@mui/icons-material/SettingsRounded';
 import { post, req, type User } from './api.js';
 import Accounts from './Accounts.js';
@@ -38,6 +39,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard.js'));
 const Transactions = lazy(() => import('./pages/Transactions.js'));
 const MonthlyPlan = lazy(() => import('./pages/MonthlyPlan.js'));
 const Installments = lazy(() => import('./pages/Installments.js'));
+const TaxDocuments = lazy(() => import('./pages/TaxDocuments.js'));
 
 type SettingsTab = 'banks' | 'users';
 
@@ -45,6 +47,7 @@ const NAV_ITEMS = [
   { path: '/dashboard', label: 'แดชบอร์ด', icon: <AssessmentRounded /> },
   { path: '/transactions', label: 'ธุรกรรม', icon: <ReceiptLongRounded /> },
   { path: '/planning', label: 'วางแผน', icon: <EventRepeatRounded /> },
+  { path: '/tax-documents', label: 'เอกสารภาษี', icon: <ReceiptRounded /> },
   { path: '/accounts', label: 'บัญชีของฉัน', icon: <AccountBalanceRounded /> },
 ] as const;
 
@@ -285,6 +288,7 @@ export default function App() {
             <Route path="/planning" element={<Box component="section" aria-labelledby="planning-heading"><MonthlyPlan /></Box>} />
             <Route path="/installments" element={<Installments />} />
             <Route path="/installments/:id" element={<Installments />} />
+            <Route path="/tax-documents" element={<Box component="section" aria-labelledby="tax-documents-heading"><TaxDocuments /></Box>} />
             <Route path="/accounts" element={<Box component="section" aria-labelledby="accounts-heading"><Accounts /></Box>} />
             {user.is_admin && <Route path="/settings" element={<SettingsPage userId={user.id} />} />}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

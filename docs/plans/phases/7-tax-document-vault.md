@@ -1,6 +1,6 @@
 # Slice 7 — Tax Document Vault
 
-> สถานะ: รอ Slice 6 เสร็จก่อน
+> สถานะ: เสร็จแล้ว
 > อ้างอิง §7.5 "Tax" (บางส่วน: `tax_entity`, `tax_document`, `tax_document_txn_link`),
 > §10.1 "Personal และ Business Separation", §10.2 "Tax Treatment", §10.3 "Tax Document Workflow",
 > §10.4 "Storage Security", §14 "Slice 7" ของ `docs/plans/hyacinthia-ledger-feature-plan.md`
@@ -11,8 +11,11 @@
 
 ## Migration
 
-`008_tax_document_vault.sql` — `tax_entity`, `tax_document`, `tax_document_txn_link`, file fingerprint
+`009_tax_document_vault.sql` — `tax_entity`, `tax_document`, `tax_document_txn_link`, `audit_log`, file fingerprint
 รวมถึง `bank_account.default_tax_entity_id` ที่เลื่อนมาจาก migration 005 (เพราะ FK ต้องรอ `tax_entity` เกิดก่อน)
+(เลข migration เลื่อนจาก `008` เป็น `009` เพราะ `007_kbank_statement_parser.sql` แทรกเข้ามาก่อนโดยไม่อยู่ในแผนเดิม
+ทำให้ Slice 6 กลายเป็น `008_income_and_installments.sql` — `audit_log` ดึงมาสร้างที่นี่แทนที่จะรอ Slice 8
+เพราะ DoD ของสไลซ์นี้เองต้องมี audit การดาวน์โหลด)
 
 ## งาน (§14)
 

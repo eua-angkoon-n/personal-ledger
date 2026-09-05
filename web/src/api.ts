@@ -49,6 +49,7 @@ export type Account = {
   bank_name: string;
   email_account_id: number;
   email: string;
+  default_tax_entity_id: number | null;
 };
 
 export type Category = {
@@ -125,11 +126,13 @@ export type TxnDetail = {
   bank_account_id: number;
   account_nickname: string;
   account_purpose: 'personal' | 'business';
+  account_default_tax_entity_id: number | null;
   bank_id: number;
   bank_name: string;
   classification: Classification;
   review_status: ReviewStatus;
   annotation_note: string | null;
+  tax_entity_id: number | null;
   statement_id: number;
   period_start: string | null;
   period_end: string | null;
@@ -342,6 +345,69 @@ export type MonthlyPlan = {
   payment_status: PaymentStatusSummary;
   items: PlanItem[];
   data_coverage_note: string;
+};
+
+export type TaxEntityType = 'individual' | 'sole_proprietor' | 'company';
+export type TaxEntity = {
+  id: number;
+  entity_type: TaxEntityType;
+  display_name: string;
+  vat_registered: boolean;
+  is_active: boolean;
+  has_tax_id: boolean;
+  created_at: string;
+};
+
+export type TaxDocumentType =
+  | 'tax_invoice' | 'e_tax_invoice' | 'receipt' | 'withholding_certificate'
+  | 'insurance_certificate' | 'donation_receipt' | 'investment_certificate' | 'other';
+export type TaxDocumentStatus = 'draft' | 'verified' | 'submitted';
+
+export type TaxDocument = {
+  id: number;
+  tax_entity_id: number;
+  document_type: TaxDocumentType;
+  tax_year: number;
+  issuer_name: string;
+  issuer_tax_id: string | null;
+  recipient_tax_id: string | null;
+  document_no: string | null;
+  issue_date: string | null;
+  subtotal_satang: number | null;
+  vat_satang: number | null;
+  total_satang: number;
+  withholding_satang: number | null;
+  file_mime: string;
+  file_size_bytes: number;
+  original_filename: string;
+  gmail_message_id: string | null;
+  status: TaxDocumentStatus;
+  verified_at: string | null;
+  retention_until: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaxDocumentLink = {
+  id: number;
+  txn_id: number;
+  linked_amount_satang: number;
+  txn_date: string;
+  description: string;
+  amount_satang: number;
+  direction: 'credit' | 'debit';
+};
+
+export type TaxDocumentDetail = TaxDocument & { links: TaxDocumentLink[] };
+export type TaxDocumentListResponse = { rows: TaxDocument[]; total_count: number; limit: number; offset: number };
+
+export type GmailAttachmentCandidate = {
+  email_account_id: number;
+  gmail_message_id: string;
+  gmail_attachment_id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
 };
 
 export type RecurringRule = {

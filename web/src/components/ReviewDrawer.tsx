@@ -20,7 +20,7 @@ import CheckRounded from '@mui/icons-material/CheckRounded';
 import CloseRounded from '@mui/icons-material/CloseRounded';
 import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded';
 import SwapHorizRounded from '@mui/icons-material/SwapHorizRounded';
-import { patch, post, put, req, type Category, type Classification, type TxnDetail, type TxnSplit } from '../api.js';
+import { patch, post, put, req, type Category, type Classification, type TaxEntity, type TxnDetail, type TxnSplit } from '../api.js';
 import { formatDate, parseBahtToSatang } from '../format.js';
 import { dataTextSx } from '../theme.js';
 import { LoadError, type Notice } from '../ui.js';
@@ -50,6 +50,7 @@ function initialClassification(detail: TxnDetail): Classification {
 type ReviewDrawerProps = {
   txnId: number | null;
   categories: Category[];
+  taxEntities: TaxEntity[];
   onClose: () => void;
   onSaved: () => void;
   onNotice: (notice: Notice) => void;
@@ -57,12 +58,13 @@ type ReviewDrawerProps = {
 
 // Drawer เดียวทำสามงาน: จัดประเภท, แยกยอดหลายหมวด, ยืนยัน/ปฏิเสธคู่โอนที่ระบบ suggest ไว้ —
 // นี่คือจุดแรกที่ผู้ใช้เห็นและกดยืนยัน suggested transfer match จริง (ย้ายมาจาก 4A ตาม 4b-dashboard.md)
-export default function ReviewDrawer({ txnId, categories, onClose, onSaved, onNotice }: ReviewDrawerProps) {
+export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, onSaved, onNotice }: ReviewDrawerProps) {
   const [detail, setDetail] = useState<TxnDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [classification, setClassification] = useState<Classification>('expense');
   const [note, setNote] = useState('');
+  const [taxEntityOverride, setTaxEntityOverride] = useState('');
   const [savingClassification, setSavingClassification] = useState(false);
   const [splits, setSplits] = useState<SplitRow[]>([]);
   const [savingSplits, setSavingSplits] = useState(false);
@@ -80,6 +82,7 @@ export default function ReviewDrawer({ txnId, categories, onClose, onSaved, onNo
       setDetail(d);
       setClassification(initialClassification(d));
       setNote(d.annotation_note ?? '');
+      setTaxEntityOverride(d.tax_entity_id == null ? '' : String(d.tax_entity_id));
       setSplits(splitsToRows(d.splits));
     } catch (e) {
       if (requestId !== requestIdRef.current) return;
@@ -97,11 +100,14 @@ export default function ReviewDrawer({ txnId, categories, onClose, onSaved, onNo
     if (!detail) return;
     setSavingClassification(true);
     try {
-      const updated = await patch<{ classification: Classification; note: string | null; review_status: string }>(
+      const updated = await patch<{ classification: Classification; note: string | null; review_status: string; tax_entity_id: number | null }>(
         `/api/transactions/${detail.id}/annotation`,
-        { classification, note: note || null },
+        { classification, note: note || null, tax_entity_id: taxEntityOverride === '' ? null : Number(taxEntityOverride) },
       );
-      setDetail((d) => (d ? { ...d, classification: updated.classification, review_status: 'reviewed', annotation_note: updated.note } : d));
+      setDetail((d) => (d ? {
+        ...d, classification: updated.classification, review_status: 'reviewed',
+        annotation_note: updated.note, tax_entity_id: updated.tax_entity_id,
+      } : d));
       onNotice({ message: 'บันทึกการจัดประเภทแล้ว', severity: 'success' });
       onSaved();
     } catch (e) {
@@ -204,6 +210,17 @@ export default function ReviewDrawer({ txnId, categories, onClose, onSaved, onNo
                   ))}
                 </TextField>
                 <TextField label="โน้ต (ไม่บังคับ)" value={note} onChange={(e) => setNote(e.target.value)} size="small" multiline minRows={2} slotProps={{ htmlInput: { maxLength: 500 } }} />
+                <TextField
+                  select
+                  label="Tax Entity"
+                  helperText={detail.account_default_tax_entity_id == null ? 'ไม่ได้ตั้งค่าเริ่มต้นไว้ที่บัญชี' : 'ไม่เลือก = ใช้ค่าเริ่มต้นจากบัญชีนี้'}
+                  value={taxEntityOverride}
+                  onChange={(e) => setTaxEntityOverride(e.target.value)}
+                  size="small"
+                >
+                  <MenuItem value=""><em>ใช้ค่าเริ่มต้นจากบัญชี</em></MenuItem>
+                  {taxEntities.map((te) => <MenuItem key={te.id} value={te.id}>{te.display_name}</MenuItem>)}
+                </TextField>
                 <Button variant="contained" onClick={() => void saveClassification()} disabled={savingClassification} aria-busy={savingClassification} sx={{ alignSelf: 'flex-start' }}>
                   {savingClassification ? 'กำลังบันทึก…' : 'บันทึกการจัดประเภท'}
                 </Button>

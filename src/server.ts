@@ -18,6 +18,9 @@ if (applied.length) console.log(`migration: ${applied.join(', ')}`);
 
 const app = express();
 app.set('trust proxy', 1); // อยู่หลัง Caddy — ต้องเชื่อ X-Forwarded-* ไม่งั้น secure cookie ไม่ทำงาน
+// เอกสารภาษีมาเป็น base64 ใน JSON (ไม่เพิ่ม multipart dependency) ต้องมีเพดานใหญ่กว่า 100kb ทั่วไป
+// ต้อง mount ก่อน express.json({limit:'100kb'}) เสมอ — body-parser ข้ามเมื่อ req._body ถูกตั้งแล้ว mount ไว้ทีหลังไม่มีผล
+app.use('/api/tax-documents', express.json({ limit: '15mb' }));
 app.use(express.json({ limit: '100kb' }));
 app.use(
   session({

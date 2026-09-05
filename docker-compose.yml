@@ -26,6 +26,7 @@ services:
       DATABASE_URL: postgres://ledger:${POSTGRES_PASSWORD}@db:5432/ledger
       NODE_ENV: development
       PDF_STORAGE_DIR: /app/data/pdf
+      TAX_DOC_STORAGE_DIR: /app/data/tax-docs
       # ponytail: เดียวกับ db — ครอบครัวเดียวโซนเวลาเดียวพอ, per-user tz ค่อยทำถ้าจำเป็นจริง
       TZ: Asia/Bangkok
     # ผูกกับ loopback เท่านั้น — iptables ของ Docker ข้าม UFW ถ้าเผลอ publish 0.0.0.0 จะเปิดสู่อินเทอร์เน็ต
@@ -33,6 +34,7 @@ services:
       - "127.0.0.1:3001:3000"
     volumes:
       - ./data/pdf:/app/data/pdf
+      - ./data/tax-docs:/app/data/tax-docs
     depends_on:
       db:
         condition: service_healthy

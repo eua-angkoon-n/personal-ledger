@@ -15,6 +15,7 @@ export const env = {
   get inviteCode() { return required('SIGNUP_INVITE_CODE'); },
   get adminEmail() { return required('ADMIN_EMAIL').toLowerCase(); },
   get pdfStorageDir() { return process.env.PDF_STORAGE_DIR ?? './data/pdf'; },
+  get taxDocStorageDir() { return process.env.TAX_DOC_STORAGE_DIR ?? './data/tax-docs'; },
   get port() { return Number(process.env.PORT ?? 3000); },
   get isProd() { return process.env.NODE_ENV === 'production'; },
 };

@@ -163,6 +163,46 @@ test('ledger classification API: category / annotation / split / transfer-match'
     assert.equal(invalid.status, 400);
   });
 
+  // §10.1: transaction override tax entity ของ bank account ได้ — ไม่ส่ง field นี้มา = ไม่แตะค่าเดิม
+  // (ต่างจาก classification/note ที่ full-replace ทุกครั้งตามเทสต์ด้านบน)
+  await t.test('annotation: ตั้ง tax_entity_id override ได้, ไม่ส่งมา = ไม่แตะ, ส่ง null มา = ล้าง', async () => {
+    const accountId = await seedAccount('131-3-13131-3');
+    const statementId = await seedStatement(accountId, 'msg-anno-tax-entity');
+    const txnId = await seedTxn(statementId, accountId, {
+      txnDate: '2026-08-06', amount: 15000, direction: 'debit', runningBalance: 85000,
+    });
+    const entity = await db.pool.query<{ id: number }>(
+      `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'บุคคลธรรมดา') returning id`,
+      [userId],
+    );
+    const entityId = entity.rows[0]!.id;
+
+    const withEntity = await request(`/api/transactions/${txnId}/annotation`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ classification: 'expense', tax_entity_id: entityId }),
+    });
+    assert.equal(withEntity.status, 200);
+    assert.equal((await withEntity.json() as { tax_entity_id: number }).tax_entity_id, entityId);
+
+    const omitted = await request(`/api/transactions/${txnId}/annotation`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ classification: 'excluded' }),
+    });
+    assert.equal((await omitted.json() as { tax_entity_id: number }).tax_entity_id, entityId);
+
+    const cleared = await request(`/api/transactions/${txnId}/annotation`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ classification: 'expense', tax_entity_id: null }),
+    });
+    assert.equal((await cleared.json() as { tax_entity_id: number | null }).tax_entity_id, null);
+
+    const detail = await (await request(`/api/transactions/${txnId}`)).json() as { tax_entity_id: number | null };
+    assert.equal(detail.tax_entity_id, null);
+  });
+
   await t.test('transaction: จำแนก credit/debit เป็นรายรับ/รายจ่ายและถือว่าตรวจแล้วโดยอัตโนมัติ', async () => {
     const accountId = await seedAccount('121-2-12121-2');
     const statementId = await seedStatement(accountId, 'msg-auto-classify');

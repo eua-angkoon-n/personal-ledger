@@ -21,10 +21,10 @@ VPS Contabo, Docker Compose ต่อโปรเจกต์, Caddy รัน�
 
 3. เพิ่มบล็อกใน `Caddyfile` ของโฮสต์ (ดูไฟล์ `Caddyfile` ในรีโปเป็นตัวอย่าง) แล้ว `caddy reload`
 
-4. เตรียมโฟลเดอร์เก็บ PDF **ก่อน** `up` ครั้งแรก
+4. เตรียมโฟลเดอร์เก็บ PDF และเอกสารภาษี **ก่อน** `up` ครั้งแรก
 
    ```sh
-   mkdir -p data/pdf && sudo chown 1000:1000 data/pdf
+   mkdir -p data/pdf data/tax-docs && sudo chown 1000:1000 data/pdf data/tax-docs
    ```
 
    ถ้าไม่ทำ Docker จะสร้างให้เองเป็น `root:root` แล้ว process ในคอนเทนเนอร์ (uid 1000 `node`) เขียนไม่ได้
@@ -47,6 +47,10 @@ git pull && docker compose up -d --build
 - `app` publish ที่ `127.0.0.1:3001` เท่านั้น กฎ iptables ของ Docker **ข้าม UFW** ถ้าเผลอเขียนเป็น `3001:3000` เฉย ๆ เท่ากับเปิดพอร์ตสู่อินเทอร์เน็ต
 - สำรองข้อมูล: `pg_dump` → **เข้ารหัสก่อนอัปโหลด** ผ่าน `rclone crypt` remote และใช้ credential ของ rclone แยกจากแอป (คนละบัญชี Google ยิ่งดี)
 - `data/pdf/` เก็บ PDF ต้นฉบับที่**ยังเข้ารหัสอยู่** ไฟล์ที่ถอดรหัสแล้วไม่เคยลงดิสก์
+- `data/tax-docs/` เก็บเอกสารภาษี — ไฟล์บนดิสก์เข้ารหัสด้วย `ENCRYPTION_KEY` เองแล้ว (ต่างจาก `data/pdf/`
+  ที่พึ่งรหัสผ่านของธนาคาร) การ backup โฟลเดอร์นี้แบบธรรมดา (เช่น `rclone copy` ไปที่เก็บข้อมูลนอกเครื่อง)
+  จึง**นับเป็น encrypted backup ตาม §10.4 อยู่แล้วในตัว** ไม่ต้องเข้ารหัสซ้ำอีกชั้น — แต่ `ENCRYPTION_KEY`
+  หายเมื่อไหร่ ทั้งโฟลเดอร์นี้ถอดไม่ได้เหมือนกับ refresh token/รหัสผ่าน PDF
 
 ## ตรวจว่าเครื่องมือใน image ครบ
 

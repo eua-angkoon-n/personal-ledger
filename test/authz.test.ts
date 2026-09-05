@@ -618,4 +618,174 @@ test('cross-user authorization: Slice 4A endpoints', async (t) => {
     assert.equal(untouched.rows[0]!.name, 'ค่าเช่าของ B');
     assert.equal(untouched.rows[0]!.is_active, true);
   });
+
+  // Slice 7 — ตาม ADR-0002 ข้อ 7: ทุก endpoint ใหม่ต้องมี integration test กัน cross-user access
+  const entityA = (
+    await db.pool.query<{ id: number }>(
+      `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'A ธรรมดา') returning id`,
+      [userA],
+    )
+  ).rows[0]!.id;
+  const entityB = (
+    await db.pool.query<{ id: number }>(
+      `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'B ธรรมดา') returning id`,
+      [userB],
+    )
+  ).rows[0]!.id;
+  const taxDocB = (
+    await db.pool.query<{ id: number }>(
+      `insert into tax_document (
+         user_id, tax_entity_id, document_type, tax_year, issuer_name, total_satang,
+         storage_path, file_sha256, file_mime, file_size_bytes, original_filename
+       ) values ($1, $2, 'receipt', 2026, 'ร้านของ B', 5000, '/tmp/b-doc.enc', 'sha-b-doc', 'application/pdf', 10, 'b.pdf')
+       returning id`,
+      [userB, entityB],
+    )
+  ).rows[0]!.id;
+
+  await t.test('25. GET/PATCH /api/tax-entities/:id — A แตะ tax entity ของ B ไม่ได้ (404)', async () => {
+    await loginAs(userA);
+    const list = (await request('/api/tax-entities').then((r) => r.json())) as { id: number }[];
+    assert.ok(!list.some((e) => e.id === entityB));
+    const patchRes = await request(`/api/tax-entities/${entityB}`, json({ display_name: 'ยึด' }));
+    assert.equal(patchRes.status, 404);
+    const row = (await db.pool.query('select display_name from tax_entity where id = $1', [entityB])).rows[0]!;
+    assert.equal(row.display_name, 'B ธรรมดา');
+  });
+
+  await t.test('26. GET /api/tax-documents/:id และ /file — A เปิดเอกสารของ B ไม่ได้ (404)', async () => {
+    await loginAs(userA);
+    assert.equal((await request(`/api/tax-documents/${taxDocB}`)).status, 404);
+    assert.equal((await request(`/api/tax-documents/${taxDocB}/file`)).status, 404);
+  });
+
+  await t.test('27. admin ดาวน์โหลด/เปิดเอกสารของ B ไม่ได้เหมือนกัน (404 ไม่ใช่สิทธิพิเศษ)', async () => {
+    await loginAs(admin);
+    assert.equal((await request(`/api/tax-documents/${taxDocB}/file`)).status, 404);
+    assert.equal((await request(`/api/tax-documents/${taxDocB}`)).status, 404);
+  });
+
+  await t.test('28. POST /api/tax-documents — ใช้ tax_entity_id ของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(
+      '/api/tax-documents',
+      post({
+        tax_entity_id: entityB,
+        document_type: 'receipt',
+        tax_year: 2026,
+        issuer_name: 'ทดสอบ',
+        total_satang: 1000,
+        filename: 'x.pdf',
+        file_base64: Buffer.from('%PDF-1.4\ntest').toString('base64'),
+      }),
+    );
+    assert.equal(res.status, 403);
+  });
+
+  await t.test('29. PUT /api/tax-documents/:id/links — ชี้ธุรกรรมของ B ไม่ได้ (400)', async () => {
+    await loginAs(userA);
+    const own = (
+      await db.pool.query<{ id: number }>(
+        `insert into tax_document (
+           user_id, tax_entity_id, document_type, tax_year, issuer_name, total_satang,
+           storage_path, file_sha256, file_mime, file_size_bytes, original_filename
+         ) values ($1, $2, 'receipt', 2026, 'ของฉัน', 1000, '/tmp/a-doc.enc', 'sha-a-doc', 'application/pdf', 10, 'a.pdf')
+         returning id`,
+        [userA, entityA],
+      )
+    ).rows[0]!.id;
+    const res = await request(`/api/tax-documents/${own}/links`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify([{ txn_id: txnB, linked_amount_satang: 1000 }]),
+    });
+    assert.equal(res.status, 400);
+    const count = await db.pool.query(
+      'select count(*)::int as n from tax_document_txn_link where tax_document_id = $1',
+      [own],
+    );
+    assert.equal(count.rows[0]!.n, 0);
+  });
+
+  await t.test('30. PATCH /api/accounts/:id — default_tax_entity_id ของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/accounts/${accountA}`, json({ default_tax_entity_id: entityB }));
+    assert.equal(res.status, 403);
+    const row = (
+      await db.pool.query('select default_tax_entity_id from bank_account where id = $1', [accountA])
+    ).rows[0]!;
+    assert.equal(row.default_tax_entity_id, null);
+  });
+
+  await t.test('31. GET /api/tax-documents — A ไม่เห็นเอกสารของ B ในรายการ', async () => {
+    await loginAs(userA);
+    const res = await request('/api/tax-documents');
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { rows: { id: number }[] };
+    assert.ok(!body.rows.some((r) => r.id === taxDocB));
+  });
+
+  await t.test('32. PATCH /api/tax-documents/:id — A แก้เอกสารของ B ไม่ได้ (404)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/tax-documents/${taxDocB}`, json({ issuer_name: 'ยึดเอกสาร B' }));
+    assert.equal(res.status, 404);
+    const row = (await db.pool.query('select issuer_name from tax_document where id = $1', [taxDocB])).rows[0]!;
+    assert.equal(row.issuer_name, 'ร้านของ B');
+  });
+
+  await t.test('33. DELETE /api/tax-documents/:id — A archive เอกสารของ B ไม่ได้ (404)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/tax-documents/${taxDocB}`, { method: 'DELETE' });
+    assert.equal(res.status, 404);
+    const row = (await db.pool.query('select archived_at from tax_document where id = $1', [taxDocB])).rows[0]!;
+    assert.equal(row.archived_at, null);
+  });
+
+  await t.test('34. PUT /api/tax-documents/:id/links — A เชื่อม transaction เข้าเอกสารของ B ไม่ได้ (404)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/tax-documents/${taxDocB}/links`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify([{ txn_id: txnA, linked_amount_satang: 5000 }]),
+    });
+    assert.equal(res.status, 404);
+    const count = await db.pool.query(
+      'select count(*)::int as n from tax_document_txn_link where tax_document_id = $1',
+      [taxDocB],
+    );
+    assert.equal(count.rows[0]!.n, 0);
+  });
+
+  await t.test('35. GET /api/tax-documents/gmail-attachments — A ค้นด้วยกล่องอีเมลของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/tax-documents/gmail-attachments?email_account_id=${emailB}`);
+    assert.equal(res.status, 403);
+  });
+
+  await t.test('35b. PATCH /api/transactions/:id/annotation — override ด้วย tax_entity_id ของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/transactions/${txnA}/annotation`, json({ classification: 'expense', tax_entity_id: entityB }));
+    assert.equal(res.status, 403);
+    const row = (await db.pool.query('select tax_entity_id from txn_annotation where txn_id = $1', [txnA])).rows[0];
+    assert.equal(row?.tax_entity_id ?? null, null);
+  });
+
+  await t.test('36. POST /api/tax-documents/from-gmail — A นำเข้าด้วยกล่องอีเมลของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(
+      '/api/tax-documents/from-gmail',
+      post({
+        email_account_id: emailB,
+        gmail_message_id: 'msg-x',
+        gmail_attachment_id: 'att-x',
+        filename: 'x.pdf',
+        tax_entity_id: entityA,
+        document_type: 'receipt',
+        tax_year: 2026,
+        issuer_name: 'ทดสอบ',
+        total_satang: 1000,
+      }),
+    );
+    assert.equal(res.status, 403);
+  });
 });

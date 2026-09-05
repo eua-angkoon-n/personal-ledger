@@ -10,7 +10,9 @@
 
 ## Migration
 
-`009_tax_calculation_and_audit.sql` — `tax_deduction_claim`, `tax_calculation_snapshot`, `audit_log`
+`010_tax_calculation_and_audit.sql` — `tax_deduction_claim`, `tax_calculation_snapshot`
+(`audit_log` ถูกสร้างไปแล้วใน `009_tax_document_vault.sql` ของ Slice 7 เพราะ "ดาวน์โหลดเอกสารภาษี" ต้องถูก
+log ตั้งแต่สไลซ์นั้น — Slice 8 มีหน้าที่แค่เพิ่ม call site ที่เหลือตาม §7.6 ไม่ต้องสร้างตารางซ้ำ)
 
 ## งาน (§14)
 

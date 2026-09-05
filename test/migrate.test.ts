@@ -272,4 +272,91 @@ test('migrate() roll-forward', async (t) => {
       ),
     );
   });
+
+  // 009: CHECK ของ tax_entity/tax_document, unique file_sha256 ต่อ user (ไม่ใช่ทั้งระบบ), unique link, FK ที่เลื่อนมาจาก 005
+  await t.test('009 enforces tax vault constraints', async () => {
+    const account = (
+      await db.pool.query<{ user_id: number }>('select user_id from bank_account where id = $1', [seededBankAccountId])
+    ).rows[0]!;
+    const userA = account.user_id;
+
+    const userB = (
+      await db.pool.query<{ id: number }>(
+        `insert into app_user (google_sub, email, display_name, is_admin, status)
+         values ('google-sub-009-b', 'tax-b@example.com', 'Tax B', false, 'approved') returning id`,
+      )
+    ).rows[0]!.id;
+
+    await assert.rejects(
+      db.pool.query(`insert into tax_entity (user_id, entity_type, display_name) values ($1, 'invalid_type', 'x')`, [userA]),
+    );
+
+    const entityA = (
+      await db.pool.query<{ id: number }>(
+        `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'บุคคลธรรมดา') returning id`,
+        [userA],
+      )
+    ).rows[0]!.id;
+    const entityB = (
+      await db.pool.query<{ id: number }>(
+        `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'B ธรรมดา') returning id`,
+        [userB],
+      )
+    ).rows[0]!.id;
+
+    const insertDoc = (userId: number, entityId: number, sha: string, overrides: Partial<{ document_type: string; status: string }> = {}) =>
+      db.pool.query<{ id: number }>(
+        `insert into tax_document (
+           user_id, tax_entity_id, document_type, tax_year, issuer_name, total_satang,
+           storage_path, file_sha256, file_mime, file_size_bytes, original_filename, status
+         ) values ($1, $2, $3, 2026, 'ร้านค้าตัวอย่าง', 10000, '/tmp/x.enc', $4, 'application/pdf', 100, 'x.pdf', $5)
+         returning id`,
+        [userId, entityId, overrides.document_type ?? 'receipt', sha, overrides.status ?? 'draft'],
+      );
+
+    await assert.rejects(insertDoc(userA, entityA, 'sha-bad-type', { document_type: 'invalid_type' }));
+    await assert.rejects(insertDoc(userA, entityA, 'sha-bad-status', { status: 'invalid_status' }));
+
+    const docA = (await insertDoc(userA, entityA, 'sha-duplicate-across-users')).rows[0]!.id;
+    // ต่างคนถือใบเสร็จใบเดียวกันได้ (unique ต่อ user ไม่ใช่ทั้งระบบ)
+    await assert.doesNotReject(insertDoc(userB, entityB, 'sha-duplicate-across-users'));
+    // แต่ user เดียวกันอัปโหลด sha ซ้ำไม่ได้ตราบใดที่ยังไม่ archive
+    await assert.rejects(insertDoc(userA, entityA, 'sha-duplicate-across-users'));
+
+    const txnRow = (
+      await db.pool.query<{ id: number }>(
+        `insert into txn (statement_id, bank_account_id, txn_date, description, amount_satang, direction, running_balance_satang)
+         values ((select statement_id from txn where id = $1), $2, '2026-08-17', 'ซื้อของใช้สำนักงาน', 10000, 'debit', 470000)
+         returning id`,
+        [seededTxnId, seededBankAccountId],
+      )
+    ).rows[0]!.id;
+
+    await assert.rejects(
+      db.pool.query(
+        `insert into tax_document_txn_link (tax_document_id, txn_id, linked_amount_satang) values ($1, $2, 0)`,
+        [docA, txnRow],
+      ),
+    );
+    await db.pool.query(
+      `insert into tax_document_txn_link (tax_document_id, txn_id, linked_amount_satang) values ($1, $2, 10000)`,
+      [docA, txnRow],
+    );
+    await assert.rejects(
+      db.pool.query(
+        `insert into tax_document_txn_link (tax_document_id, txn_id, linked_amount_satang) values ($1, $2, 5000)`,
+        [docA, txnRow],
+      ),
+    );
+
+    // FK ที่เลื่อนมาจาก 005 — ตอนนี้ tax_entity มีจริงแล้ว ชี้ id ที่ไม่มีต้องโดน 23503
+    await db.pool.query(
+      `insert into txn_annotation (txn_id, classification, review_status) values ($1, 'expense', 'reviewed')`,
+      [txnRow],
+    );
+    await assert.rejects(
+      db.pool.query('update txn_annotation set tax_entity_id = 999999 where txn_id = $1', [txnRow]),
+    );
+    await db.pool.query('update txn_annotation set tax_entity_id = $1 where txn_id = $2', [entityA, txnRow]);
+  });
 });
