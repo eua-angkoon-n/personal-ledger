@@ -359,4 +359,58 @@ test('migrate() roll-forward', async (t) => {
     );
     await db.pool.query('update txn_annotation set tax_entity_id = $1 where txn_id = $2', [entityA, txnRow]);
   });
+
+  await t.test('010 enforces tax calculation constraints', async () => {
+    const account = (
+      await db.pool.query<{ user_id: number }>('select user_id from bank_account where id = $1', [seededBankAccountId])
+    ).rows[0]!;
+    const userId = account.user_id;
+    const entityId = (
+      await db.pool.query<{ id: number }>(
+        `insert into tax_entity (user_id, entity_type, display_name) values ($1, 'individual', 'Slice 8 entity') returning id`,
+        [userId],
+      )
+    ).rows[0]!.id;
+
+    const txnRow = (
+      await db.pool.query<{ id: number }>(
+        `insert into txn (statement_id, bank_account_id, txn_date, description, amount_satang, direction, running_balance_satang)
+         values ((select statement_id from txn where id = $1), $2, '2026-08-18', 'ค่าอุปกรณ์สำนักงาน', 20000, 'debit', 450000)
+         returning id`,
+        [seededTxnId, seededBankAccountId],
+      )
+    ).rows[0]!.id;
+    await db.pool.query(
+      `insert into txn_annotation (txn_id, classification, review_status) values ($1, 'expense', 'reviewed')`,
+      [txnRow],
+    );
+
+    // §10.2: tax_treatment ต้องเป็นหนึ่งใน 6 ค่าเท่านั้น และปล่อย null ได้ (ผู้ใช้ยังไม่ได้ตัดสิน)
+    await assert.rejects(
+      db.pool.query(`update txn_annotation set tax_treatment = 'invalid_treatment' where txn_id = $1`, [txnRow]),
+    );
+    await db.pool.query(`update txn_annotation set tax_treatment = 'business_expense' where txn_id = $1`, [txnRow]);
+
+    const insertClaim = (eligible: number, claimed: number) =>
+      db.pool.query<{ id: number }>(
+        `insert into tax_deduction_claim (user_id, tax_entity_id, tax_year, deduction_type, eligible_amount_satang, claimed_amount_satang)
+         values ($1, $2, 2026, 'donation', $3, $4) returning id`,
+        [userId, entityId, eligible, claimed],
+      );
+    // claimed ต้องไม่เกิน eligible
+    await assert.rejects(insertClaim(10000, 20000));
+    const claimId = (await insertClaim(10000, 10000)).rows[0]!.id;
+    // ไม่มี unique ต่อ deduction_type — สองแถวประเภทเดียวกันในปีเดียวกันต้องทำได้ (drill-down ต่อเอกสาร)
+    await assert.doesNotReject(insertClaim(5000, 5000));
+
+    await assert.rejects(
+      db.pool.query(`update tax_deduction_claim set tax_document_id = 999999 where id = $1`, [claimId]),
+    );
+
+    await db.pool.query(
+      `insert into tax_calculation_snapshot (user_id, tax_entity_id, tax_year, rule_version, input_snapshot, result_snapshot)
+       values ($1, $2, 2026, 'th-pit-2025.1', '{}'::jsonb, '{}'::jsonb)`,
+      [userId, entityId],
+    );
+  });
 });

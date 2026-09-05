@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import FilterListRounded from '@mui/icons-material/FilterListRounded';
 import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded';
-import { req, type Account, type Bank, type Category, type TaxEntity, type TxnListResponse } from '../api.js';
+import { req, TAX_TREATMENT_LABEL, type Account, type Bank, type Category, type TaxEntity, type TaxTreatment, type TxnListResponse } from '../api.js';
 import MonthPicker, { currentMonth } from '../components/MonthPicker.js';
 import ReviewDrawer from '../components/ReviewDrawer.js';
 import TransactionTable from '../components/TransactionTable.js';
@@ -47,7 +47,13 @@ export default function Transactions() {
   const [refreshing, setRefreshing] = useState(false);
   const requestIdRef = useRef(0);
 
-  const month = searchParams.get('month') ?? currentMonth();
+  // drill-down จากหน้าภาษี (ทั้งปี ไม่ใช่รายเดือน) ส่ง from/to มาแทน month — ต้องไม่ถูก MonthPicker
+  // เบียดทับด้วยเดือนปัจจุบันเงียบ ๆ ไม่งั้นตัวเลขที่ drill-down มาจากการ์ดกับที่เห็นในตารางไม่ตรงกัน
+  const rangeFrom = searchParams.get('from');
+  const rangeTo = searchParams.get('to');
+  const monthParam = searchParams.get('month');
+  const rangeMode = monthParam == null && rangeFrom != null && rangeTo != null;
+  const month = monthParam ?? currentMonth();
   const bankAccountId = searchParams.get('bank_account_id') ?? '';
   const bankId = searchParams.get('bank_id') ?? '';
   const categoryId = searchParams.get('category_id') ?? '';
@@ -58,6 +64,8 @@ export default function Transactions() {
   const reviewStatus = searchParams.get('review_status') ?? '';
   const minBaht = searchParams.get('min_baht') ?? '';
   const maxBaht = searchParams.get('max_baht') ?? '';
+  const taxTreatment = searchParams.get('tax_treatment') ?? '';
+  const taxEntityIdFilter = searchParams.get('tax_entity_id') ?? '';
   const q = searchParams.get('q') ?? '';
   const page = Number(searchParams.get('page') ?? '1');
 
@@ -90,7 +98,7 @@ export default function Transactions() {
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
-    p.set('month', month);
+    if (rangeMode) { p.set('from', rangeFrom!); p.set('to', rangeTo!); } else { p.set('month', month); }
     if (bankAccountId) p.set('bank_account_id', bankAccountId);
     if (bankId) p.set('bank_id', bankId);
     if (categoryId) p.set('category_id', categoryId);
@@ -99,6 +107,8 @@ export default function Transactions() {
     if (accountPurpose) p.set('account_purpose', accountPurpose);
     if (isInternalTransfer) p.set('is_internal_transfer', isInternalTransfer);
     if (reviewStatus) p.set('review_status', reviewStatus);
+    if (taxTreatment) p.set('tax_treatment', taxTreatment);
+    if (taxEntityIdFilter) p.set('tax_entity_id', taxEntityIdFilter);
     const minSatang = minBaht ? parseBahtToSatang(minBaht) : null;
     const maxSatang = maxBaht ? parseBahtToSatang(maxBaht) : null;
     if (minSatang != null) p.set('min_satang', String(minSatang));
@@ -107,7 +117,7 @@ export default function Transactions() {
     p.set('limit', String(LIMIT));
     p.set('offset', String((page - 1) * LIMIT));
     return p.toString();
-  }, [month, bankAccountId, bankId, categoryId, uncategorised, direction, accountPurpose, isInternalTransfer, reviewStatus, minBaht, maxBaht, q, page]);
+  }, [rangeMode, rangeFrom, rangeTo, month, bankAccountId, bankId, categoryId, uncategorised, direction, accountPurpose, isInternalTransfer, reviewStatus, taxTreatment, taxEntityIdFilter, minBaht, maxBaht, q, page]);
 
   // background=true (ยิงจาก ReviewDrawer.onSaved) = คำขอเดิมซ้ำ ไม่ใช่ filter เปลี่ยน — ไม่ unmount ตารางเป็น
   // skeleton (ไม่งั้น IconButton ที่ FocusTrap ของ drawer จำไว้คืน focus หายไปทุกครั้งที่บันทึก) และ error
@@ -145,7 +155,7 @@ export default function Transactions() {
 
   const rows = data?.rows ?? [];
   const totalCount = data?.total_count ?? 0;
-  const activeFilterCount = [bankId, categoryId, direction, accountPurpose, isInternalTransfer, reviewStatus, minBaht, maxBaht].filter(Boolean).length + (uncategorised ? 1 : 0);
+  const activeFilterCount = [bankId, categoryId, direction, accountPurpose, isInternalTransfer, reviewStatus, taxTreatment, taxEntityIdFilter, minBaht, maxBaht].filter(Boolean).length + (uncategorised ? 1 : 0);
 
   return (
     <Box>
@@ -159,7 +169,13 @@ export default function Transactions() {
 
       <Stack spacing={1.5} sx={{ mt: 3 }}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' }, flexWrap: 'wrap' }}>
-          <MonthPicker value={month} onChange={(m) => setFilter({ month: m })} />
+          <MonthPicker value={month} onChange={(m) => setFilter({ month: m, from: null, to: null })} />
+          {rangeMode && (
+            <Chip
+              label={`ช่วง ${rangeFrom} – ${rangeTo}`}
+              onDelete={() => setFilter({ from: null, to: null, month: currentMonth() })}
+            />
+          )}
           <TextField
             select
             size="small"
@@ -233,6 +249,17 @@ export default function Transactions() {
               <MenuItem value="">ทั้งหมด</MenuItem>
               <MenuItem value="true">เฉพาะโอนภายใน</MenuItem>
               <MenuItem value="false">ไม่รวมโอนภายใน</MenuItem>
+            </TextField>
+            <TextField select size="small" label="Tax Treatment" value={taxTreatment} onChange={(e) => setFilter({ tax_treatment: e.target.value })} sx={{ minWidth: 150 }}>
+              <MenuItem value="">ทั้งหมด</MenuItem>
+              <MenuItem value="none">ยังไม่ระบุ</MenuItem>
+              {(Object.entries(TAX_TREATMENT_LABEL) as [TaxTreatment, string][]).map(([value, label]) => (
+                <MenuItem key={value} value={value}>{label}</MenuItem>
+              ))}
+            </TextField>
+            <TextField select size="small" label="Tax Entity" value={taxEntityIdFilter} onChange={(e) => setFilter({ tax_entity_id: e.target.value })} sx={{ minWidth: 150 }}>
+              <MenuItem value="">ทั้งหมด</MenuItem>
+              {taxEntities.map((te) => <MenuItem key={te.id} value={te.id}>{te.display_name}</MenuItem>)}
             </TextField>
             <TextField
               size="small"

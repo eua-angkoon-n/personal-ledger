@@ -788,4 +788,51 @@ test('cross-user authorization: Slice 4A endpoints', async (t) => {
     );
     assert.equal(res.status, 403);
   });
+
+  // ---- Slice 8: tax calculation — deduction claim/snapshot/audit-log ต้อง scope ด้วย user เสมอ ----
+  await t.test('37. GET /api/tax/:year/summary?tax_entity_id=B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(`/api/tax/2026/summary?tax_entity_id=${entityB}`);
+    assert.equal(res.status, 403);
+  });
+
+  await t.test('38. POST /api/tax/:year/calculate ด้วย tax_entity_id ของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request('/api/tax/2026/calculate', post({ tax_entity_id: entityB }));
+    assert.equal(res.status, 403);
+  });
+
+  await t.test('39. POST /api/tax/deduction-claims ด้วย tax_entity_id ของ B ไม่ได้ (403)', async () => {
+    await loginAs(userA);
+    const res = await request(
+      '/api/tax/deduction-claims',
+      post({ tax_entity_id: entityB, tax_year: 2026, deduction_type: 'donation', eligible_amount_satang: 1000, claimed_amount_satang: 1000 }),
+    );
+    assert.equal(res.status, 403);
+  });
+
+  let claimIdOfB: number;
+  await t.test('40. PATCH/DELETE /api/tax/deduction-claims/:id — ของ B แตะไม่ได้ (404)', async () => {
+    await loginAs(userB);
+    const created = await request(
+      '/api/tax/deduction-claims',
+      post({ tax_entity_id: entityB, tax_year: 2026, deduction_type: 'donation', eligible_amount_satang: 1000, claimed_amount_satang: 1000 }),
+    );
+    claimIdOfB = ((await created.json()) as { id: number }).id;
+
+    await loginAs(userA);
+    const patchRes = await request(`/api/tax/deduction-claims/${claimIdOfB}`, json({ claimed_amount_satang: 500 }));
+    assert.equal(patchRes.status, 404);
+    const delRes = await request(`/api/tax/deduction-claims/${claimIdOfB}`, { method: 'DELETE' });
+    assert.equal(delRes.status, 404);
+    const row = (await db.pool.query('select claimed_amount_satang from tax_deduction_claim where id = $1', [claimIdOfB])).rows[0]!;
+    assert.equal(row.claimed_amount_satang, 1000);
+  });
+
+  await t.test('41. GET /api/audit-log — A เห็นเฉพาะเหตุการณ์ของตัวเอง ไม่เห็นของ B', async () => {
+    await loginAs(userA);
+    const res = await request('/api/audit-log?entity_type=tax_deduction_claim');
+    const body = (await res.json()) as { rows: { entity_id: number }[] };
+    assert.ok(!body.rows.some((r) => r.entity_id === claimIdOfB));
+  });
 });

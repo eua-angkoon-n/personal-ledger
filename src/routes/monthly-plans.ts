@@ -6,6 +6,7 @@ import { enumStr, HttpError, id, isoDate, pathId, satang, str, optionalStr, type
 import { generateMonthlyItems } from '../services/recurring-generation.js';
 import { reconcilePayments } from '../services/payment-reconciliation.js';
 import { declarePayment, generateInstallmentItems } from '../services/installments.js';
+import { audit } from '../services/audit.js';
 import {
   assertOwnedRefs,
   ITEM_PAID_SQL,
@@ -162,22 +163,27 @@ monthlyPlansRouter.post('/monthly-plans/:month/items', requireUser(async (req, r
   const categoryId = b.category_id == null || b.category_id === '' ? null : id(b, 'category_id');
   await assertOwnedRefs(pool, user.id, { categoryId });
 
-  const { rows } = await query(
-    `insert into monthly_plan_item
-       (monthly_plan_id, kind, name, category_id, planned_amount_satang, due_date, note)
-     values ($1, $2, $3, $4, $5, $6, $7)
-     returning *`,
-    [
-      plan.id,
-      enumStr(b, 'kind', KINDS),
-      str(b, 'name', 120),
-      categoryId,
-      satang(b, 'planned_amount_satang'),
-      dueDate,
-      optionalStr(b, 'note', 500),
-    ],
-  );
-  res.status(201).json(rows[0]);
+  const created = await tx(async (c) => {
+    const { rows } = await c.query(
+      `insert into monthly_plan_item
+         (monthly_plan_id, kind, name, category_id, planned_amount_satang, due_date, note)
+       values ($1, $2, $3, $4, $5, $6, $7)
+       returning *`,
+      [
+        plan.id,
+        enumStr(b, 'kind', KINDS),
+        str(b, 'name', 120),
+        categoryId,
+        satang(b, 'planned_amount_satang'),
+        dueDate,
+        optionalStr(b, 'note', 500),
+      ],
+    );
+    const after = rows[0];
+    await audit(c, { userId: user.id, action: 'monthly_plan_item.create', entityType: 'monthly_plan_item', entityId: after.id, after, ip: req.ip ?? null });
+    return after;
+  });
+  res.status(201).json(created);
 }));
 
 /**
@@ -268,7 +274,9 @@ monthlyPlansRouter.patch('/monthly-plan-items/:id', requireUser(async (req, res,
         has('note') ? optionalStr(b, 'note', 500) : null,
       ],
     );
-    return rows[0];
+    const after = rows[0];
+    await audit(c, { userId: user.id, action: 'monthly_plan_item.update', entityType: 'monthly_plan_item', entityId: itemId, before: item, after, ip: req.ip ?? null });
+    return after;
   });
   res.json(updated);
 }));
@@ -283,7 +291,9 @@ monthlyPlansRouter.post('/monthly-plan-items/:id/skip', requireUser(async (req, 
       `update monthly_plan_item set explicit_status = 'skipped', updated_at = now() where id = $1 returning *`,
       [itemId],
     );
-    return rows[0];
+    const after = rows[0];
+    await audit(c, { userId: user.id, action: 'monthly_plan_item.skip', entityType: 'monthly_plan_item', entityId: itemId, before: item, after, ip: req.ip ?? null });
+    return after;
   });
   res.json(updated);
 }));
@@ -301,7 +311,11 @@ monthlyPlansRouter.post('/monthly-plan-items/:id/skip', requireUser(async (req, 
 monthlyPlansRouter.post('/monthly-plan-items/:id/payments', requireUser(async (req, res, user) => {
   const itemId = pathId(req);
   const b = req.body as Body;
-  const inserted = await tx(c => declarePayment(c, user.id, itemId, b));
+  const inserted = await tx(async (c) => {
+    const row = await declarePayment(c, user.id, itemId, b);
+    await audit(c, { userId: user.id, action: 'monthly_item_payment.declare', entityType: 'monthly_item_payment', entityId: row.id, after: row, ip: req.ip ?? null });
+    return row;
+  });
 
   try {
     await reconcilePayments(pool, user.id);
@@ -358,7 +372,9 @@ monthlyPlansRouter.patch('/monthly-item-payments/:id', requireUser(async (req, r
          where id = $1 returning *`,
         [paymentId],
       );
-      return rows[0];
+      const after = rows[0];
+      await audit(c, { userId: user.id, action: 'monthly_item_payment.cancel', entityType: 'monthly_item_payment', entityId: paymentId, before: payment, after, ip: req.ip ?? null });
+      return after;
     }
 
     if (payment.status === 'matched') throw new HttpError(409, 'รายการจ่ายนี้จับคู่ไว้แล้ว');
@@ -392,7 +408,9 @@ monthlyPlansRouter.patch('/monthly-item-payments/:id', requireUser(async (req, r
        where id = $1 returning *`,
       [paymentId, txnId],
     );
-    return rows[0];
+    const after = rows[0];
+    await audit(c, { userId: user.id, action: 'monthly_item_payment.confirm', entityType: 'monthly_item_payment', entityId: paymentId, before: payment, after, ip: req.ip ?? null });
+    return after;
   });
   res.json(updated);
 }));
@@ -412,7 +430,9 @@ monthlyPlansRouter.post('/monthly-plans/:month/close', requireUser(async (req, r
        where id = $1 returning id, month_start, status, closed_at, closed_snapshot`,
       [plan.id, JSON.stringify(snapshot)],
     );
-    return rows[0];
+    const after = rows[0];
+    await audit(c, { userId: user.id, action: 'monthly_plan.close', entityType: 'monthly_plan', entityId: plan.id, before: plan, after, ip: req.ip ?? null });
+    return after;
   });
   res.json(closed);
 }));
@@ -421,12 +441,17 @@ monthlyPlansRouter.post('/monthly-plans/:month/close', requireUser(async (req, r
 // ตอนปิดครั้งก่อนตัวเลขเป็นเท่าไร ปิดอีกครั้งจะเขียนทับ
 monthlyPlansRouter.post('/monthly-plans/:month/reopen', requireUser(async (req, res, user) => {
   const { monthStart } = monthFromPath(req);
-  const { rows } = await query(
-    `update monthly_plan set status = 'open', closed_at = null
-     where user_id = $1 and month_start = $2 and status = 'closed'
-     returning id, month_start, status, closed_at, closed_snapshot`,
-    [user.id, monthStart],
-  );
-  if (!rows[0]) throw new HttpError(404, 'ไม่พบเดือนที่ปิดอยู่');
-  res.json(rows[0]);
+  const reopened = await tx(async (c) => {
+    const { rows } = await c.query(
+      `update monthly_plan set status = 'open', closed_at = null
+       where user_id = $1 and month_start = $2 and status = 'closed'
+       returning id, month_start, status, closed_at, closed_snapshot`,
+      [user.id, monthStart],
+    );
+    const after = rows[0];
+    if (!after) throw new HttpError(404, 'ไม่พบเดือนที่ปิดอยู่');
+    await audit(c, { userId: user.id, action: 'monthly_plan.reopen', entityType: 'monthly_plan', entityId: after.id, after, ip: req.ip ?? null });
+    return after;
+  });
+  res.json(reopened);
 }));

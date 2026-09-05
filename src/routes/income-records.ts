@@ -10,6 +10,7 @@ import {
   matchIncome,
   saveIncome,
 } from "../services/income-records.js";
+import { audit } from "../services/audit.js";
 
 export const incomeRecordsRouter = Router();
 incomeRecordsRouter.get(
@@ -46,13 +47,12 @@ incomeRecordsRouter.put(
   requireUser(async (req, res, user) => {
     if (!Object.hasOwn(req.body, "deductions"))
       throw new HttpError(400, "ต้องส่ง deductions");
+    const recordId = pathId(req);
     const result = await tx(async (c) => {
-      const recordId = await saveIncome(
-        c,
-        user.id,
-        { deductions: req.body.deductions },
-        pathId(req),
-      );
+      const before = (await c.query("select * from income_deduction where income_record_id=$1 order by id", [recordId])).rows;
+      await saveIncome(c, user.id, { deductions: req.body.deductions }, recordId);
+      const after = (await c.query("select * from income_deduction where income_record_id=$1 order by id", [recordId])).rows;
+      await audit(c, { userId: user.id, action: "income_deduction.update", entityType: "income_record", entityId: recordId, before, after, ip: req.ip ?? null });
       return (await incomeRows(c, user.id, undefined, recordId))[0];
     });
     res.json(result);

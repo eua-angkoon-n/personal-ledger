@@ -5,7 +5,7 @@
 
 ## Git
 
-- บน `master`, ล่าสุดถึง Slice 7 (Tax Document Vault) — ดูรายละเอียดที่ section ของแต่ละ Slice ด้านล่าง
+- บน `master`, ล่าสุดถึง Slice 8 (Tax Calculation) — ดูรายละเอียดที่ section ของแต่ละ Slice ด้านล่าง
 - หลัง Slice 1–3 มีงาน rebrand เป็น "Hyacinthia Ledger" และ redesign หน้าเว็บทั้งหมดด้วย MUI
   (โฟลเดอร์/`package.json` ยังชื่อ `family-ledger` — ยังไม่ได้ตามรีเนม)
 - PDF, `.eml`, `.env` และ `data/` ถูก ignore ไม่เข้า git
@@ -267,14 +267,73 @@
 - **ยังไม่เคยเปิดดูในเบราว์เซอร์จริง** เหมือนทุกเฟสก่อนหน้า — environment นี้ไม่มี browser automation
   ยืนยันได้แค่ `npm run test:db` + `npm run build` (typecheck ทั้ง backend/web + vite build ผ่าน) ไม่ยืนยัน
   layout, การอัปโหลดไฟล์จริงผ่าน `<input type="file">`, หรือ flow การเลือกไฟล์แนบจาก Gmail จริง
-- ถัดไป: Slice 8 (Tax Calculation) ตามลำดับใน `docs/plans/phases/README.md`
+
+## Slice 8 — Tax Calculation: เสร็จแล้ว
+
+- Migration `010_tax_calculation_and_audit.sql` — `txn_annotation.tax_treatment` (6 ค่าตาม §10.2, nullable
+  ไม่มี default โดยเจตนา — §7.5 ห้าม Bank Debit ถือเป็นค่าใช้จ่ายหักภาษีได้เองโดยไม่มีคนตัดสิน), `tax_deduction_claim`,
+  `tax_calculation_snapshot` (`audit_log` มีแล้วตั้งแต่ 009 ไม่สร้างซ้ำ)
+- `tax_treatment` เป็นคอลัมน์แยกจาก `classification` เดิมโดยตั้งใจ (ไม่ขยาย enum เดิม) — คำนวณภาษีอ่าน
+  `tax_treatment` อย่างเดียว รายงาน/แดชบอร์ดเดิมอ่าน `classification` อย่างเดียว สองค่านี้ขัดกันได้โดยตั้งใจ
+  (เช่น `classification='income'` + `tax_treatment='excluded'` = เงินเข้าจริงแต่ไม่เอาเข้าฐานภาษี)
+- Rule เป็น data ไม่ใช่ตาราง DB (`src/services/tax-rules.ts`) — ขั้นบันไดภาษีบุคคลธรรมดา + ลดหย่อนส่วนตัว
+  60,000 + ค่าใช้จ่ายเงินได้ 40(1) 50% ไม่เกิน 100,000 ปีภาษี ค.ศ. 2024/2025 **ยังไม่ผ่านการตรวจกับ
+  rd.go.th** (มี `// TODO` กำกับไว้ในโค้ด) — ผู้ใช้ยืนยันจะตรวจเองก่อนใช้ตัดสินใจภาษีจริง
+- `src/services/tax-calculation.ts` เป็นฟังก์ชัน pure `estimateTax(input, rules)` (เหมือน `occurrencesInMonth`
+  ไม่แตะ DB) ลำดับคำนวณ: หักค่าใช้จ่ายเงินได้จาก **เงินเดือนอย่างเดียว** (ไม่รวม business income เข้ามาคิด %),
+  assessable = เงินเดือน + รายได้ธุรกิจอื่น − ค่าใช้จ่ายหักภาษีได้, net = assessable − ค่าใช้จ่ายเงินได้ −
+  ลดหย่อนส่วนตัว − ค่าลดหย่อนที่ยื่น, ภาษี = ขั้นบันไดของ net, ยอดที่ต้องชำระ = ภาษี − ภาษีหัก ณ ที่จ่าย
+  (ติดลบ = ขอคืน) — เฉพาะ entity `individual` เท่านั้นที่ได้ตัวเลขนี้ `sole_proprietor`/`company` ได้แค่ยอดสรุป
+  + missing-document report (CIT เป็นคนละระบบ ไม่รองรับในเฟสนี้ตามที่ตกลงกัน)
+- `GET /api/tax/:year/summary` คำนวณสดไม่มี side effect (บทเรียนจาก Slice 5 ที่ GET เขียนข้อมูลเงียบ ๆ)
+  `POST /api/tax/:year/calculate` เขียน `tax_calculation_snapshot` **1 แถวต่อ 1 tax_entity_id เสมอ**
+  (ห้ามรวม Tax Entity คนละประเภทในผลเดียว) `input_snapshot` ฝัง rule set ทั้งก้อนไว้ ไม่ใช่แค่ version string
+  — แก้ตัวเลข rule ปีถัดไปจะไม่ย้อนเปลี่ยนความหมายของ snapshot เก่า
+- `tax_deduction_claim` CRUD ลบได้จริง (ไม่ archive) ตาม §17 เพราะ `audit_log.before_data` เก็บทั้งแถวไว้แล้ว
+  — ไม่มี unique ต่อ `deduction_type` เพราะตีกับ `tax_document_id` (ใบอนุโมทนาบัตรบริจาคสองใบในปีเดียวกัน
+  ต้องเป็นสองแถวแยกกันเพื่อ drill-down ต่อเอกสารได้)
+- `src/services/report-query.ts` เพิ่ม `tax_treatment`/`tax_entity_id`/`classification` เข้า `TXN_FILTER_SQL`
+  และ `EFFECTIVE_TAX_ENTITY_SQL` — จุดสำคัญ: `tax_treatment` รับ sentinel `'none'` แทน "ยังไม่ระบุ" (IS NULL)
+  เพราะ `null` เดิมแปลว่า "ไม่กรอง" อยู่แล้ว ถ้าไม่มี sentinel ปุ่ม drill-down ของการ์ด "ยังไม่ระบุ Tax Treatment"
+  จะคืน superset ของทุกธุรกรรมแทนที่จะเป็นชุดที่การ์ดนับจริง (พบระหว่าง code review ก่อน commit)
+- Audit call site ที่เหลือครบทั้ง 9 จุดตาม §7.6 (เปลี่ยน category/tax treatment, split, confirm/reject transfer,
+  mark paid ทั้งจาก monthly plan และจากแผนผ่อน, ยกเลิก/ยืนยัน payment, แก้ plan item/skip, ปิด/เปิดเดือน,
+  แก้แผนผ่อน, แก้รายการหักรายได้, archive บัญชี, ค่าลดหย่อน, export ภาษี) — `GET /api/audit-log` อ่านได้
+  พร้อมหน้า `AuditLog.tsx` (`/audit`, ไอคอนข้างปุ่มออกจากระบบ ไม่อยู่ใน nav หลัก เหมือน `/installments`)
+- เว็บ: `TaxSummary.tsx` (`/tax?year=&tax_entity_id=`), `DeductionClaimSection.tsx` (คัดลอกแพทเทิร์นจาก
+  `IncomeSection.tsx`), ปุ่ม CSV (server string-join + `<a download>`, ไม่เพิ่ม dependency) และปุ่มพิมพ์
+  (`window.print()` แทน PDF library — อัปเกรดเมื่อมีคนต้องการ layout ต่างจากหน้าจอจริง ๆ)
+- `ReviewDrawer.tsx` เพิ่ม select "Tax Treatment" (จุดเดียวที่ผู้ใช้ตั้งค่านี้ได้ ไม่มี default ให้ระบบเดา) และ
+  `Transactions.tsx` เพิ่ม filter `tax_treatment`/`tax_entity_id` + รองรับ `from`/`to` (ไม่ใช่แค่ `month`)
+  สำหรับ drill-down รายปีจากหน้าภาษี
+- **บั๊กที่พบระหว่าง code review (ก่อน commit) และแก้แล้วทั้งหมด**:
+  - `aggregateTaxInputs` join `income_deduction` เข้ากับ `income_record` ตรง ๆ เพื่อรวม `gross_amount_satang`
+    พร้อมกัน — ถ้า income record หนึ่งแถวมี `deduction_type='withholding_tax'` มากกว่าหนึ่งแถว (schema ไม่มี
+    unique คุม) join จะ fan-out แล้วนับรายได้ซ้ำหลายรอบ แก้เป็น scalar subquery แยกกันสองก้อน
+  - การ์ด "ยังไม่ระบุ Tax Treatment" ส่งพารามิเตอร์ไม่ครบ ทำให้ drill-down ได้ทุกธุรกรรมของปีนั้นแทนที่จะเป็น
+    เฉพาะที่การ์ดนับ (superset) — เพิ่ม sentinel `tax_treatment=none` ใน `TXN_FILTER_SQL` แก้ปัญหานี้
+  - `GET /api/tax/:year/snapshots` ไม่เรียก `assertOwnsTaxEntity` เหมือน endpoint พี่น้อง (ปลอดภัยเพราะ query
+    scope ด้วย `user_id` อยู่แล้ว แต่ไม่สอดคล้องกัน) — เพิ่มให้ตรงกัน
+  - `bank_account.archive` audit เขียน `select *` เข้า `before_data`/`after_data` ทำให้ `pdf_password_enc`
+    (ciphertext) รั่วเข้า `audit_log` ที่ `GET /api/audit-log` คืนดิบให้เจ้าของอ่านได้ — เปลี่ยนเป็น select
+    เฉพาะคอลัมน์ปลอดภัย
+  - `/installment-dues/:id/payments` (mark paid ฝั่งแผนผ่อน) ไม่มี audit call site ทั้งที่ endpoint พี่น้อง
+    (`monthly-plan-items/:id/payments`) มี — เพิ่มให้ครบ
+- **125 → 204 เทสต์** (`npm run test:db`) เพิ่ม `test/tax-calculation.test.ts` (pure, ครอบ `estimateTax`/
+  `resolveRuleSet`), `test/tax-calculations-api.test.ts` (DB, ครอบ summary/snapshot/claim CRUD/export/audit +
+  DoD reconciliation test ที่ยิง `GET summary` แล้วเทียบผลรวมจาก drill-down ของแต่ละการ์ดว่าตรงเป๊ะ — เพื่อ
+  กันบั๊กคลาสเดียวกับที่ Slice 4B เคยส่งมอบไปแบบพัง), `test/migrate.test.ts` subtest 010, `test/authz.test.ts`
+  ข้อ 37–41 (คำนวณภาษี, ค่าลดหย่อน, snapshot, export, audit-log ข้ามคน) · `npm run build` สะอาด
+- **ยังไม่เคยเปิดดูในเบราว์เซอร์จริง** เหมือนทุกเฟสก่อนหน้า — environment นี้ไม่มี browser automation และต้องมี
+  Google OAuth session จริง ยืนยันได้แค่ `npm run test:db` + `npm run build`
+- ตั้งใจไม่ทำในเฟสนี้: ภ.ง.ด.90/91 เต็มรูป (แยกเงินได้ 40(1)–(8) รายประเภท), ภาษีนิติบุคคล (CIT), PDF generator
+  จริง (ใช้ print stylesheet), OCR/text extraction ของเอกสารภาษี (§10.3 "ระยะหลัง")
 
 ## Requirement ที่ยังไม่มี Slice รองรับ
 
 - Text extraction / OCR / duplicate suggestion สำหรับเอกสารภาษี (§10.3 "ระยะหลัง")
-- `audit_log` มีตารางและ 2 action แล้ว (`tax_document.download`, `tax_document.link_txn`) แต่ยังไม่มี
-  call site อีก 7 อย่างตาม §7.6 (แก้ category, confirm/cancel transfer, mark paid, แก้ plan, แก้ installment,
-  แก้ค่าลดหย่อน, archive บัญชี) และยังไม่มี API อ่าน — Slice 8
+- ภ.ง.ด.90/91 เต็มรูป และภาษีนิติบุคคล (CIT) — Slice 8 ทำเฉพาะประมาณการบุคคลธรรมดาแบบย่อ (ขั้นบันได +
+  ลดหย่อนส่วนตัว + ค่าใช้จ่ายเงินได้ 50%/100,000 + ค่าลดหย่อนที่ผู้ใช้กรอกเอง)
 
 ## UI design guideline — ปิดแล้ว
 

@@ -23,6 +23,10 @@ export const EFFECTIVE_REVIEW_STATUS_SQL = "coalesce(an.review_status, 'reviewed
 // แต่ list ธุรกรรม (TXN_FILTER_SQL) ต้องไม่ใช้ตัวนี้ ผู้ใช้ต้องยังเห็น internal transfer ในตารางได้ (§8.3/§8.4)
 export const EXCLUDED_FROM_FLOW_SQL = `(${IS_INTERNAL_TRANSFER_SQL} or coalesce(an.classification, '') = 'excluded')`;
 
+// entity ที่มีผลจริงต่อธุรกรรมนี้ — override ต่อรายการถ้ามี ไม่งั้นใช้ default ของบัญชี (§10.1, Slice 7)
+// Slice 8 (คำนวณภาษี) ใช้ตัวนี้ตัดสิน entity เจ้าของยอด ไม่ใช่สร้างกลไกนี้ใหม่
+export const EFFECTIVE_TAX_ENTITY_SQL = 'coalesce(an.tax_entity_id, a.default_tax_entity_id)';
+
 export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -131,9 +135,25 @@ export type TxnFilters = {
   minSatang: number | null;
   maxSatang: number | null;
   q: string | null;
+  // 'none' = sentinel หมายถึง "ยังไม่ระบุ" (IS NULL) ไม่ใช่ค่า enum จริงในตาราง — ให้ drill-down จาก
+  // missing-document report ("ยังไม่ระบุ Tax Treatment") กรองชุดเดียวกับที่การ์ดนับได้ ไม่งั้นส่ง null
+  // (=ไม่กรองอะไรเลย) จะได้ superset ผิดจากที่การ์ดบอก
+  taxTreatment: string | 'none' | null;
+  taxEntityId: number | null;
+  classification: 'income' | 'expense' | 'internal_transfer' | 'excluded' | null;
   limit: number;
   offset: number;
 };
+
+const TAX_TREATMENTS = [
+  'personal',
+  'business_income',
+  'business_expense',
+  'non_deductible',
+  'internal_transfer',
+  'excluded',
+  'none', // sentinel: กรองเฉพาะ tax_treatment is null — ดูคอมเมนต์ที่ TxnFilters.taxTreatment
+] as const;
 
 export function parseTxnFilters(q: Record<string, unknown>): TxnFilters {
   const { from, to } = parseRange(q);
@@ -157,13 +177,18 @@ export function parseTxnFilters(q: Record<string, unknown>): TxnFilters {
     minSatang: optSatang(q, 'min_satang'),
     maxSatang: optSatang(q, 'max_satang'),
     q: typeof q.q === 'string' && q.q.trim() !== '' ? q.q.trim() : null,
+    taxTreatment: optEnum(q, 'tax_treatment', TAX_TREATMENTS),
+    taxEntityId: optId(q, 'tax_entity_id'),
+    classification: optEnum(q, 'classification', ['income', 'expense', 'internal_transfer', 'excluded'] as const),
     limit: Math.min(limitRaw, 200),
     offset: offsetRaw,
   };
 }
 
-// $1 = userId เสมอ, $2/$3 = ช่วงวันที่ครึ่งเปิด, $4..$14 = ตัวกรอง ผู้เรียก (route) ต่อ limit/offset ของตัวเองได้จาก $15
+// $1 = userId เสมอ, $2/$3 = ช่วงวันที่ครึ่งเปิด, $4..$17 = ตัวกรอง ผู้เรียก (route) ต่อ limit/offset ของตัวเองได้จาก $18
 // txn.counterparty เป็น NULL เสมอ (worker ไม่เคยเขียนคอลัมน์นี้) — ค้นหาด้วย description อย่างเดียว
+// $15/$16/$17 เพิ่มเข้ามาใน Slice 8 ให้การ์ดภาษี (group ตาม tax_treatment/entity) กับปุ่ม drill-down
+// ไปหน้านี้แสดง "ชุดเดียวกันเป๊ะ" — ไม่งั้นซ้ำรอยบั๊ก excluded ที่ Slice 4B ทิ้งไว้ (การ์ดตัด แต่ list กรองไม่ได้)
 export const TXN_FILTER_SQL = `
   where a.user_id = $1
     and t.txn_date >= $2 and t.txn_date < $3
@@ -178,6 +203,9 @@ export const TXN_FILTER_SQL = `
     and ($12::bigint is null or t.amount_satang >= $12)
     and ($13::bigint is null or t.amount_satang <= $13)
     and ($14::text is null or t.description ilike '%' || $14 || '%')
+    and ($15::text is null or ($15 = 'none' and an.tax_treatment is null) or an.tax_treatment = $15)
+    and ($16::bigint is null or (${EFFECTIVE_TAX_ENTITY_SQL}) = $16)
+    and ($17::text is null or (${EFFECTIVE_CLASSIFICATION_SQL}) = $17)
 `;
 
 export function txnFilterParams(userId: number, f: TxnFilters): unknown[] {
@@ -196,6 +224,9 @@ export function txnFilterParams(userId: number, f: TxnFilters): unknown[] {
     f.minSatang,
     f.maxSatang,
     f.q,
+    f.taxTreatment,
+    f.taxEntityId,
+    f.classification,
   ];
 }
 

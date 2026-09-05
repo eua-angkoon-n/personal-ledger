@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { requireUser } from '../auth.js';
 import { encrypt } from '../crypto.js';
-import { query } from '../db.js';
+import { query, tx } from '../db.js';
 import { HttpError, id, optionalStr, str, type Body } from '../http.js';
 import { assertOwnsTaxEntity } from './tax-entities.js';
 import { syncEmailAccount } from '../worker.js';
+import { audit } from '../services/audit.js';
 
 export const accountsRouter = Router();
 
@@ -93,13 +94,23 @@ accountsRouter.patch('/accounts/:id', requireUser(async (req, res, user) => {
   res.json(rows[0]);
 }));
 
+// ห้าม select pdf_password_enc ออกไปแม้แต่เข้า audit_log — GET /api/audit-log คืน before_data/after_data
+// ดิบให้เจ้าของอ่านได้ตรง ๆ ถ้าใส่ ciphertext ของรหัสผ่าน PDF เข้าไปจะรั่วไปอีกทางที่ไม่มีใครกันไว้
+const ARCHIVE_AUDIT_COLUMNS = 'id, nickname, account_number, bank_id, email_account_id, promptpay_id, default_tax_entity_id, archived_at';
+
 accountsRouter.delete('/accounts/:id', requireUser(async (req, res, user) => {
   // เก็บเข้าคลัง (archive) แทนลบจริง — statement/txn ผูก on delete cascade กับ bank_account
   // ลบแถวจริงจะพาประวัติ statement/txn ทั้งชุดหายไปด้วย
-  const { rowCount } = await query(
-    'update bank_account set archived_at = now() where id = $1 and user_id = $2 and archived_at is null',
-    [Number(req.params.id), user.id],
-  );
-  if (!rowCount) throw new HttpError(404, 'ไม่พบบัญชี');
+  const accountId = Number(req.params.id);
+  await tx(async (c) => {
+    const before = (await c.query(`select ${ARCHIVE_AUDIT_COLUMNS} from bank_account where id = $1 and user_id = $2`, [accountId, user.id])).rows[0];
+    if (!before) throw new HttpError(404, 'ไม่พบบัญชี');
+    const { rows } = await c.query(
+      `update bank_account set archived_at = now() where id = $1 and user_id = $2 and archived_at is null returning ${ARCHIVE_AUDIT_COLUMNS}`,
+      [accountId, user.id],
+    );
+    if (!rows[0]) throw new HttpError(404, 'ไม่พบบัญชี');
+    await audit(c, { userId: user.id, action: 'bank_account.archive', entityType: 'bank_account', entityId: accountId, before, after: rows[0], ip: req.ip ?? null });
+  });
   res.status(204).end();
 }));

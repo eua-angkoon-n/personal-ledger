@@ -20,8 +20,10 @@ import {
 import AccountBalanceWalletRounded from '@mui/icons-material/AccountBalanceWalletRounded';
 import AccountBalanceRounded from '@mui/icons-material/AccountBalanceRounded';
 import AssessmentRounded from '@mui/icons-material/AssessmentRounded';
+import CalculateRounded from '@mui/icons-material/CalculateRounded';
 import EventRepeatRounded from '@mui/icons-material/EventRepeatRounded';
 import BlockRounded from '@mui/icons-material/BlockRounded';
+import HistoryRounded from '@mui/icons-material/HistoryRounded';
 import HourglassTopRounded from '@mui/icons-material/HourglassTopRounded';
 import LoginRounded from '@mui/icons-material/LoginRounded';
 import LogoutRounded from '@mui/icons-material/LogoutRounded';
@@ -40,6 +42,8 @@ const Transactions = lazy(() => import('./pages/Transactions.js'));
 const MonthlyPlan = lazy(() => import('./pages/MonthlyPlan.js'));
 const Installments = lazy(() => import('./pages/Installments.js'));
 const TaxDocuments = lazy(() => import('./pages/TaxDocuments.js'));
+const TaxSummary = lazy(() => import('./pages/TaxSummary.js'));
+const AuditLog = lazy(() => import('./pages/AuditLog.js'));
 
 type SettingsTab = 'banks' | 'users';
 
@@ -48,11 +52,13 @@ const NAV_ITEMS = [
   { path: '/transactions', label: 'ธุรกรรม', icon: <ReceiptLongRounded /> },
   { path: '/planning', label: 'วางแผน', icon: <EventRepeatRounded /> },
   { path: '/tax-documents', label: 'เอกสารภาษี', icon: <ReceiptRounded /> },
+  { path: '/tax', label: 'ภาษี', icon: <CalculateRounded /> },
   { path: '/accounts', label: 'บัญชีของฉัน', icon: <AccountBalanceRounded /> },
 ] as const;
 
 // Tabs ต้อง value ตรงกับ value ของ Tab ลูกเป๊ะ — ตัดเหลือ segment แรกของ path (ตัด query/segment ย่อยทิ้ง
 // เช่น /transactions?month=... ยังนับเป็น /transactions) ไม่ตรงกับ NAV_ITEMS/settings เลย = ไม่มี tab ไหน active
+// /audit ตั้งใจไม่อยู่ใน NAV_ITEMS (เหมือน /installments ไม่อยู่แต่ routed) — เข้าถึงผ่านไอคอนข้างปุ่มออกจากระบบ
 function activeNavPath(pathname: string): string | false {
   if (pathname.startsWith('/installments')) return '/planning';
   const top = '/' + (pathname.split('/')[1] ?? '');
@@ -270,6 +276,9 @@ export default function App() {
                 />
               )}
             </Tabs>
+            <Tooltip title="ประวัติการเปลี่ยนแปลง">
+              <IconButton color="inherit" aria-label="ประวัติการเปลี่ยนแปลง" component={Link} to="/audit"><HistoryRounded /></IconButton>
+            </Tooltip>
             <Tooltip title="ออกจากระบบ">
               <span>
                 <IconButton color="inherit" aria-label="ออกจากระบบ" onClick={logout} disabled={loggingOut}><LogoutRounded /></IconButton>
@@ -289,6 +298,8 @@ export default function App() {
             <Route path="/installments" element={<Installments />} />
             <Route path="/installments/:id" element={<Installments />} />
             <Route path="/tax-documents" element={<Box component="section" aria-labelledby="tax-documents-heading"><TaxDocuments /></Box>} />
+            <Route path="/tax" element={<Box component="section" aria-labelledby="tax-summary-heading"><TaxSummary /></Box>} />
+            <Route path="/audit" element={<Box component="section" aria-labelledby="audit-log-heading"><AuditLog /></Box>} />
             <Route path="/accounts" element={<Box component="section" aria-labelledby="accounts-heading"><Accounts /></Box>} />
             {user.is_admin && <Route path="/settings" element={<SettingsPage userId={user.id} />} />}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

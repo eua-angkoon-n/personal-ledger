@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { requireUser } from '../auth.js';
 import { query, tx } from '../db.js';
-import { HttpError, id, optionalStr, pathId, str, type Body } from '../http.js';
+import { HttpError, enumStr, id, optionalStr, pathId, str, type Body } from '../http.js';
+import { audit } from '../services/audit.js';
 import { assertOwnsTaxEntity } from './tax-entities.js';
 import {
   EFFECTIVE_CLASSIFICATION_SQL,
   EFFECTIVE_REVIEW_STATUS_SQL,
+  EFFECTIVE_TAX_ENTITY_SQL,
   OWNED_TXN_FROM,
   TXN_FILTER_SQL,
   parseTxnFilters,
@@ -33,6 +35,7 @@ transactionsRouter.get('/transactions', requireUser(async (req, res, user) => {
             a.id as bank_account_id, a.nickname as account_nickname, a.account_purpose,
             b.id as bank_id, b.name as bank_name,
             ${EFFECTIVE_CLASSIFICATION_SQL} as classification, ${EFFECTIVE_REVIEW_STATUS_SQL} as review_status,
+            an.tax_treatment, (${EFFECTIVE_TAX_ENTITY_SQL}) as effective_tax_entity_id,
             coalesce(sp.categories, '[]'::json) as categories,
             coalesce(sp.split_count, 0) as split_count,
             count(*) over () as total_count
@@ -45,7 +48,7 @@ transactionsRouter.get('/transactions', requireUser(async (req, res, user) => {
      ) sp on true
      ${TXN_FILTER_SQL}
      order by t.txn_date desc, t.id desc
-     limit $15 offset $16`,
+     limit $18 offset $19`,
     params,
   );
   // count(*) over () อยู่ในแถวข้อมูล — หน้าที่ offset เลยแถวสุดท้าย (หรือ filter ไม่ตรงอะไรเลย) จะได้ rows ว่าง
@@ -79,7 +82,7 @@ transactionsRouter.get('/transactions/:id', requireUser(async (req, res, user) =
             a.default_tax_entity_id as account_default_tax_entity_id,
             b.id as bank_id, b.name as bank_name,
             ${EFFECTIVE_CLASSIFICATION_SQL} as classification, ${EFFECTIVE_REVIEW_STATUS_SQL} as review_status,
-            an.note as annotation_note, an.tax_entity_id,
+            an.note as annotation_note, an.tax_entity_id, an.tax_treatment,
             st.id as statement_id, st.period_start, st.period_end
      from txn t
      join bank_account a on a.id = t.bank_account_id
@@ -115,6 +118,16 @@ transactionsRouter.get('/transactions/:id', requireUser(async (req, res, user) =
 }));
 
 const CLASSIFICATIONS = ['income', 'expense', 'internal_transfer', 'excluded'] as const;
+// §10.2 — คำนวณภาษี (Slice 8) อ่านคอลัมน์นี้อย่างเดียว รายงานเดิมอ่าน classification อย่างเดียว
+// สองคอลัมน์ขัดกันได้โดยตั้งใจ (ดูคอมเมนต์ migration 010)
+const TAX_TREATMENTS = [
+  'personal',
+  'business_income',
+  'business_expense',
+  'non_deductible',
+  'internal_transfer',
+  'excluded',
+] as const;
 
 async function ownedTxn(userId: number, txnId: number): Promise<{ id: number; amount_satang: number } | null> {
   const { rows } = await query<{ id: number; amount_satang: number }>(
@@ -146,20 +159,37 @@ transactionsRouter.patch('/transactions/:id/annotation', requireUser(async (req,
     await assertOwnsTaxEntity(user.id, taxEntityId);
   }
 
-  const { rows } = await query(
-    `insert into txn_annotation (txn_id, classification, note, tax_entity_id, review_status, reviewed_at, updated_at)
-     values ($1, $2, $3, $4, 'reviewed', now(), now())
-     on conflict (txn_id) do update set
-       classification = excluded.classification,
-       note = excluded.note,
-       tax_entity_id = case when $5 then excluded.tax_entity_id else txn_annotation.tax_entity_id end,
-       review_status = 'reviewed',
-       reviewed_at = now(),
-       updated_at = now()
-     returning *`,
-    [txnId, classification, note, taxEntityId, taxEntityIdProvided],
-  );
-  res.json(rows[0]);
+  // §10.2/§7.5: tax_treatment เหมือน tax_entity_id ไม่ใช่เหมือน classification — ไม่ส่ง field มา = ไม่แตะค่าเดิม
+  // ผู้ใช้ต้องเลือกเองเสมอ (Bank Debit ไม่ใช่ค่าใช้จ่ายหักภาษีอัตโนมัติ) ระบบห้ามล้างค่าที่ตั้งไว้แล้วโดยไม่ตั้งใจ
+  const taxTreatmentProvided = Object.prototype.hasOwnProperty.call(b, 'tax_treatment');
+  let taxTreatment: string | null = null;
+  if (taxTreatmentProvided && b.tax_treatment != null) {
+    taxTreatment = enumStr(b, 'tax_treatment', TAX_TREATMENTS);
+  }
+
+  const row = await tx(async (c) => {
+    const before = (await c.query('select * from txn_annotation where txn_id = $1', [txnId])).rows[0] ?? null;
+
+    const { rows } = await c.query(
+      `insert into txn_annotation (txn_id, classification, note, tax_entity_id, tax_treatment, review_status, reviewed_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'reviewed', now(), now())
+       on conflict (txn_id) do update set
+         classification = excluded.classification,
+         note = excluded.note,
+         tax_entity_id = case when $6 then excluded.tax_entity_id else txn_annotation.tax_entity_id end,
+         tax_treatment = case when $7 then excluded.tax_treatment else txn_annotation.tax_treatment end,
+         review_status = 'reviewed',
+         reviewed_at = now(),
+         updated_at = now()
+       returning *`,
+      [txnId, classification, note, taxEntityId, taxTreatment, taxEntityIdProvided, taxTreatmentProvided],
+    );
+    const after = rows[0];
+
+    await audit(c, { userId: user.id, action: 'txn.annotate', entityType: 'txn', entityId: txnId, before, after, ip: req.ip ?? null });
+    return after;
+  });
+  res.json(row);
 }));
 
 type SplitInput = { category_id: number; amount_satang: number; note: string | null };
@@ -199,6 +229,8 @@ transactionsRouter.put('/transactions/:id/splits', requireUser(async (req, res, 
     );
     if (cats.rowCount !== categoryIds.length) throw new HttpError(400, 'มีหมวดที่ไม่มีอยู่จริงหรือไม่ใช่ของคุณ');
 
+    const before = (await c.query('select * from txn_split where txn_id = $1 order by id', [txnId])).rows;
+
     await c.query('delete from txn_split where txn_id = $1', [txnId]);
     for (const s of splits) {
       await c.query(
@@ -215,7 +247,9 @@ transactionsRouter.put('/transactions/:id/splits', requireUser(async (req, res, 
       }
     }
 
-    return (await c.query('select * from txn_split where txn_id = $1 order by id', [txnId])).rows;
+    const after = (await c.query('select * from txn_split where txn_id = $1 order by id', [txnId])).rows;
+    await audit(c, { userId: user.id, action: 'txn.split', entityType: 'txn', entityId: txnId, before, after, ip: req.ip ?? null });
+    return after;
   });
 
   res.json(result);

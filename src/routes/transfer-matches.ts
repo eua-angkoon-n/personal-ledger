@@ -3,6 +3,7 @@ import { requireUser } from '../auth.js';
 import { pathId } from '../http.js';
 import { query, tx } from '../db.js';
 import { HttpError } from '../http.js';
+import { audit } from '../services/audit.js';
 
 export const transferMatchesRouter = Router();
 
@@ -52,6 +53,8 @@ transferMatchesRouter.get('/transfer-matches', requireUser(async (req, res, user
 transferMatchesRouter.post('/transfer-matches/:id/confirm', requireUser(async (req, res, user) => {
   const matchId = pathId(req);
   const updated = await tx(async (c) => {
+    const before = (await c.query('select status from transfer_match where id = $1 and user_id = $2', [matchId, user.id])).rows[0] ?? null;
+
     const { rows } = await c.query<{ debit_txn_id: number; credit_txn_id: number }>(
       `update transfer_match set status = 'confirmed', reviewed_at = now()
        where id = $1 and user_id = $2
@@ -69,6 +72,10 @@ transferMatchesRouter.post('/transfer-matches/:id/confirm', requireUser(async (r
     );
     if (flipped.rowCount !== 2) throw new HttpError(404, 'ไม่พบธุรกรรมที่จะจับคู่');
 
+    await audit(c, {
+      userId: user.id, action: 'transfer_match.confirm', entityType: 'transfer_match', entityId: matchId,
+      before, after: { status: 'confirmed', ...match }, ip: req.ip ?? null,
+    });
     return match;
   });
   res.json(updated);
@@ -100,6 +107,10 @@ transferMatchesRouter.post('/transfer-matches/:id/reject', requireUser(async (re
       );
     }
 
+    await audit(c, {
+      userId: user.id, action: 'transfer_match.reject', entityType: 'transfer_match', entityId: matchId,
+      before: match, after: rows[0], ip: req.ip ?? null,
+    });
     return rows[0];
   });
   res.json(updated);

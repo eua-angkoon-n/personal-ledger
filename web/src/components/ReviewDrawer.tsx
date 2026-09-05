@@ -20,7 +20,11 @@ import CheckRounded from '@mui/icons-material/CheckRounded';
 import CloseRounded from '@mui/icons-material/CloseRounded';
 import DeleteOutlineRounded from '@mui/icons-material/DeleteOutlineRounded';
 import SwapHorizRounded from '@mui/icons-material/SwapHorizRounded';
-import { patch, post, put, req, type Category, type Classification, type TaxEntity, type TxnDetail, type TxnSplit } from '../api.js';
+import {
+  patch, post, put, req,
+  TAX_TREATMENT_LABEL,
+  type Category, type Classification, type TaxEntity, type TaxTreatment, type TxnDetail, type TxnSplit,
+} from '../api.js';
 import { formatDate, parseBahtToSatang } from '../format.js';
 import { dataTextSx } from '../theme.js';
 import { LoadError, type Notice } from '../ui.js';
@@ -65,6 +69,7 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
   const [classification, setClassification] = useState<Classification>('expense');
   const [note, setNote] = useState('');
   const [taxEntityOverride, setTaxEntityOverride] = useState('');
+  const [taxTreatment, setTaxTreatment] = useState('');
   const [savingClassification, setSavingClassification] = useState(false);
   const [splits, setSplits] = useState<SplitRow[]>([]);
   const [savingSplits, setSavingSplits] = useState(false);
@@ -83,6 +88,7 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
       setClassification(initialClassification(d));
       setNote(d.annotation_note ?? '');
       setTaxEntityOverride(d.tax_entity_id == null ? '' : String(d.tax_entity_id));
+      setTaxTreatment(d.tax_treatment ?? '');
       setSplits(splitsToRows(d.splits));
     } catch (e) {
       if (requestId !== requestIdRef.current) return;
@@ -100,13 +106,17 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
     if (!detail) return;
     setSavingClassification(true);
     try {
-      const updated = await patch<{ classification: Classification; note: string | null; review_status: string; tax_entity_id: number | null }>(
+      const updated = await patch<{ classification: Classification; note: string | null; review_status: string; tax_entity_id: number | null; tax_treatment: TaxTreatment | null }>(
         `/api/transactions/${detail.id}/annotation`,
-        { classification, note: note || null, tax_entity_id: taxEntityOverride === '' ? null : Number(taxEntityOverride) },
+        {
+          classification, note: note || null,
+          tax_entity_id: taxEntityOverride === '' ? null : Number(taxEntityOverride),
+          tax_treatment: taxTreatment === '' ? null : taxTreatment,
+        },
       );
       setDetail((d) => (d ? {
         ...d, classification: updated.classification, review_status: 'reviewed',
-        annotation_note: updated.note, tax_entity_id: updated.tax_entity_id,
+        annotation_note: updated.note, tax_entity_id: updated.tax_entity_id, tax_treatment: updated.tax_treatment,
       } : d));
       onNotice({ message: 'บันทึกการจัดประเภทแล้ว', severity: 'success' });
       onSaved();
@@ -220,6 +230,19 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                 >
                   <MenuItem value=""><em>ใช้ค่าเริ่มต้นจากบัญชี</em></MenuItem>
                   {taxEntities.map((te) => <MenuItem key={te.id} value={te.id}>{te.display_name}</MenuItem>)}
+                </TextField>
+                <TextField
+                  select
+                  label="Tax Treatment (สำหรับคำนวณภาษี)"
+                  helperText="Bank Debit ไม่ถือเป็นค่าใช้จ่ายหักภาษีได้เอง — ต้องเลือกเองเสมอ"
+                  value={taxTreatment}
+                  onChange={(e) => setTaxTreatment(e.target.value)}
+                  size="small"
+                >
+                  <MenuItem value=""><em>ยังไม่ระบุ</em></MenuItem>
+                  {(Object.entries(TAX_TREATMENT_LABEL) as [TaxTreatment, string][]).map(([value, label]) => (
+                    <MenuItem key={value} value={value}>{label}</MenuItem>
+                  ))}
                 </TextField>
                 <Button variant="contained" onClick={() => void saveClassification()} disabled={savingClassification} aria-busy={savingClassification} sx={{ alignSelf: 'flex-start' }}>
                   {savingClassification ? 'กำลังบันทึก…' : 'บันทึกการจัดประเภท'}

@@ -24,7 +24,7 @@
 | 5 — Monthly Planning | [5-monthly-planning.md](5-monthly-planning.md) | `006_monthly_planning.sql` | เสร็จ |
 | 6 — Income & Installment | [6-income-installment.md](6-income-installment.md) | `008_income_and_installments.sql` | เสร็จ |
 | 7 — Tax Document Vault | [7-tax-document-vault.md](7-tax-document-vault.md) | `009_tax_document_vault.sql` | เสร็จ |
-| 8 — Tax Calculation | [8-tax-calculation.md](8-tax-calculation.md) | `010_tax_calculation_and_audit.sql` | ถัดไป |
+| 8 — Tax Calculation | [8-tax-calculation.md](8-tax-calculation.md) | `010_tax_calculation_and_audit.sql` | เสร็จ |
 
 หมายเหตุเลข migration: `007_kbank_statement_parser.sql` เป็นงาน seed ข้อมูลที่ไม่ได้อยู่ในแผนเดิม
 แทรกเข้ามาก่อน Slice 6 ทำให้เลขไฟล์ของ Slice 6 เป็นต้นไปเลื่อน +1 จากที่ตารางนี้เคยระบุไว้ก่อนหน้า

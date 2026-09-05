@@ -9,6 +9,7 @@ import {
   saveInstallment,
 } from "../services/installments.js";
 import { reconcilePayments } from "../services/payment-reconciliation.js";
+import { audit } from "../services/audit.js";
 export const installmentsRouter = Router();
 installmentsRouter.get(
   "/installment-plans",
@@ -46,31 +47,33 @@ installmentsRouter.get(
 installmentsRouter.post(
   "/installment-plans",
   requireUser(async (req, res, user) => {
-    res
-      .status(201)
-      .json(
-        await tx(async (c) =>
-          installmentDetail(
-            c,
-            user.id,
-            await saveInstallment(c, user.id, req.body),
-          ),
-        ),
+    const created = await tx(async (c) => {
+      const detail = await installmentDetail(
+        c,
+        user.id,
+        await saveInstallment(c, user.id, req.body),
       );
+      await audit(c, { userId: user.id, action: "installment_plan.create", entityType: "installment_plan", entityId: detail.id, after: detail, ip: req.ip ?? null });
+      return detail;
+    });
+    res.status(201).json(created);
   }),
 );
 installmentsRouter.patch(
   "/installment-plans/:id",
   requireUser(async (req, res, user) => {
-    res.json(
-      await tx(async (c) =>
-        installmentDetail(
-          c,
-          user.id,
-          await saveInstallment(c, user.id, req.body, pathId(req)),
-        ),
-      ),
-    );
+    const planId = pathId(req);
+    const updated = await tx(async (c) => {
+      const before = (await c.query("select * from installment_plan where id=$1 and user_id=$2", [planId, user.id])).rows[0] ?? null;
+      const detail = await installmentDetail(
+        c,
+        user.id,
+        await saveInstallment(c, user.id, req.body, planId),
+      );
+      await audit(c, { userId: user.id, action: "installment_plan.update", entityType: "installment_plan", entityId: planId, before, after: detail, ip: req.ip ?? null });
+      return detail;
+    });
+    res.json(updated);
   }),
 );
 installmentsRouter.post(
@@ -78,7 +81,9 @@ installmentsRouter.post(
   requireUser(async (req, res, user) => {
     const payment = await tx(async (c) => {
       const { itemId } = await materializeDue(c, user.id, pathId(req));
-      return declarePayment(c, user.id, itemId, req.body);
+      const row = await declarePayment(c, user.id, itemId, req.body);
+      await audit(c, { userId: user.id, action: "monthly_item_payment.declare", entityType: "monthly_item_payment", entityId: row.id, after: row, ip: req.ip ?? null });
+      return row;
     });
     try {
       await reconcilePayments(pool, user.id);

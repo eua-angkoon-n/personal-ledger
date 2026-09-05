@@ -83,6 +83,10 @@ export type TxnListRow = {
   bank_name: string;
   classification: Classification;
   review_status: ReviewStatus;
+  tax_treatment: TaxTreatment | null;
+  // ค่าที่มีผลจริงหลัง resolve override/default แล้ว (coalesce) — ต่างจาก TxnDetail.tax_entity_id
+  // ที่เป็นค่า override ดิบสำหรับแก้ไข อย่าปนกัน
+  effective_tax_entity_id: number | null;
   categories: TxnSplitInfo[];
   split_count: number;
 };
@@ -133,6 +137,7 @@ export type TxnDetail = {
   review_status: ReviewStatus;
   annotation_note: string | null;
   tax_entity_id: number | null;
+  tax_treatment: TaxTreatment | null;
   statement_id: number;
   period_start: string | null;
   period_end: string | null;
@@ -427,3 +432,112 @@ export type RecurringRule = {
   category_name: string | null;
   is_active: boolean;
 };
+
+// §10.2 — คนละคอลัมน์กับ Classification (txn_annotation.tax_treatment) เจตนาแยกกัน ดูคอมเมนต์ migration 010
+export type TaxTreatment = 'personal' | 'business_income' | 'business_expense' | 'non_deductible' | 'internal_transfer' | 'excluded';
+export const TAX_TREATMENT_LABEL: Record<TaxTreatment, string> = {
+  personal: 'ส่วนตัว',
+  business_income: 'รายได้ธุรกิจ',
+  business_expense: 'ค่าใช้จ่ายหักภาษีได้',
+  non_deductible: 'ค่าใช้จ่ายหักภาษีไม่ได้',
+  internal_transfer: 'โอนเงินภายใน',
+  excluded: 'ไม่นับรวม',
+};
+
+export type TaxBracketBreakdown = { upToSatang: number | null; rate: number; taxSatang: number };
+export type TaxEstimate = {
+  ruleVersion: string;
+  employmentIncomeSatang: number;
+  otherIncomeSatang: number;
+  deductibleExpenseSatang: number;
+  employmentExpenseSatang: number;
+  personalAllowanceSatang: number;
+  deductionClaimSatang: number;
+  assessableSatang: number;
+  netSatang: number;
+  estimatedTaxSatang: number;
+  withholdingSatang: number;
+  estimatedPayableSatang: number;
+  bracketBreakdown: TaxBracketBreakdown[];
+};
+
+export type TaxInputs = {
+  employmentIncomeSatang: number;
+  otherIncomeSatang: number;
+  deductibleExpenseSatang: number;
+  deductionClaimSatang: number;
+  withholdingSatang: number;
+  withholdingCertificateSatang: number;
+  unresolvedIncomeSatang: number;
+};
+
+export type UnlinkedBusinessTxnSample = { id: number; txn_date: string; description: string; amount_satang: number };
+export type UnlinkedClaimSample = { id: number; deduction_type: string; claimed_amount_satang: number };
+
+export type TaxMissingDocument = {
+  untreated_txn_count: number;
+  unlinked_business_txn_count: number;
+  unlinked_business_txn_samples: UnlinkedBusinessTxnSample[];
+  draft_document_count: number;
+  unlinked_claim_count: number;
+  unlinked_claim_samples: UnlinkedClaimSample[];
+  unresolved_income_satang: number;
+};
+
+export type TaxDrilldownParams = Record<'other_income' | 'deductible_expense' | 'untreated_txn', Record<string, string>>;
+
+export type EmploymentIncomeRecord = {
+  id: number;
+  name: string;
+  income_date: string | null;
+  gross_amount_satang: number;
+  month_start: string;
+};
+
+export type TaxSummary = {
+  tax_year: number;
+  tax_entity_id: number;
+  entity_type: TaxEntityType;
+  rule_version: string;
+  inputs: TaxInputs;
+  estimate: TaxEstimate | null;
+  estimate_unavailable_reason: string | null;
+  missing_document: TaxMissingDocument;
+  employment_income_records: EmploymentIncomeRecord[];
+  drilldown_params: TaxDrilldownParams;
+};
+
+export type TaxCalculationSnapshot = {
+  id: number;
+  tax_entity_id: number;
+  tax_year: number;
+  rule_version: string;
+  input_snapshot: unknown;
+  result_snapshot: { estimate: TaxEstimate | null; estimate_unavailable_reason: string | null };
+  calculated_at: string;
+};
+
+export type TaxDeductionClaim = {
+  id: number;
+  tax_entity_id: number;
+  tax_year: number;
+  deduction_type: string;
+  eligible_amount_satang: number;
+  claimed_amount_satang: number;
+  tax_document_id: number | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuditLogEntry = {
+  id: number;
+  action: string;
+  entity_type: string;
+  entity_id: number | null;
+  before_data: unknown;
+  after_data: unknown;
+  ip_address: string | null;
+  created_at: string;
+};
+export type AuditLogListResponse = { rows: AuditLogEntry[]; total_count: number; limit: number; offset: number };
