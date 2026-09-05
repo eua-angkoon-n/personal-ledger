@@ -234,7 +234,13 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                 <TextField
                   select
                   label="Tax Entity"
-                  helperText={detail.account_default_tax_entity_id == null ? 'ไม่ได้ตั้งค่าเริ่มต้นไว้ที่บัญชี' : 'ไม่เลือก = ใช้ค่าเริ่มต้นจากบัญชีนี้'}
+                  helperText={
+                    detail.account_default_tax_entity_id != null
+                      ? 'ไม่เลือก = ใช้ค่าเริ่มต้นจากบัญชีนี้'
+                      : taxEntities.length === 1
+                        ? `ไม่เลือกก็ได้ — มี Tax Entity เดียว ระบบผูกให้เป็น "${taxEntities[0]!.display_name}" เอง`
+                        : 'บัญชีนี้ยังไม่ได้ตั้งค่าเริ่มต้น — เลือกเองต่อรายการ หรือไปตั้งค่าเริ่มต้นที่หน้าบัญชีของฉัน'
+                  }
                   value={taxEntityOverride}
                   onChange={(e) => setTaxEntityOverride(e.target.value)}
                   size="small"
@@ -245,7 +251,11 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                 <TextField
                   select
                   label="Tax Treatment (สำหรับคำนวณภาษี)"
-                  helperText="Bank Debit ไม่ถือเป็นค่าใช้จ่ายหักภาษีได้เอง — ต้องเลือกเองเสมอ"
+                  helperText={
+                    detail.direction === 'credit'
+                      ? 'เงินเดือน/รายได้ประจำ ไม่ต้องตั้งตรงนี้ — ใช้ปุ่ม "บันทึกเป็นรายได้เต็ม" ด้านบน เลือก "รายได้ธุรกิจ" เฉพาะรายได้ธุรกิจ/ฟรีแลนซ์'
+                      : 'เลือก "ค่าใช้จ่ายหักภาษีได้" เฉพาะรายจ่ายที่หักภาษีได้จริง — ระบบไม่เดาให้เพราะเงินออกจากบัญชีไม่ได้แปลว่าหักภาษีได้'
+                  }
                   value={taxTreatment}
                   onChange={(e) => setTaxTreatment(e.target.value)}
                   size="small"

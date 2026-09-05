@@ -494,6 +494,16 @@ export type EmploymentIncomeRecord = {
   month_start: string;
 };
 
+// เงินเข้าที่ยังไม่มี "รายได้เต็ม" รองรับ — ระบบเสนอ ผู้ใช้กดยืนยัน (ไม่สร้างเงียบ ๆ เพราะยอดก่อนหักเดาไม่ได้)
+export type UnrecordedIncomeTxn = {
+  id: number;
+  txn_date: string;
+  description: string;
+  amount_satang: number;
+  bank_account_id: number;
+  account_nickname: string;
+};
+
 export type TaxSummary = {
   tax_year: number;
   tax_entity_id: number;
@@ -504,6 +514,7 @@ export type TaxSummary = {
   estimate_unavailable_reason: string | null;
   missing_document: TaxMissingDocument;
   employment_income_records: EmploymentIncomeRecord[];
+  unrecorded_income_txns: UnrecordedIncomeTxn[];
   drilldown_params: TaxDrilldownParams;
 };
 

@@ -45,6 +45,7 @@ export default function TaxSummary() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [revision, setRevision] = useState(0);
   const [expandedSnapshotId, setExpandedSnapshotId] = useState<number | null>(null);
+  const [recording, setRecording] = useState(false);
 
   useEffect(() => {
     let current = true;
@@ -73,6 +74,37 @@ export default function TaxSummary() {
 
   const goTransactions = (params: Record<string, string>) => {
     navigate(`/transactions?${new URLSearchParams(params).toString()}`);
+  };
+
+  // ระบบเจอเงินเข้าที่ยังไม่ได้บันทึกเป็นรายได้เต็มให้แล้ว — ปุ่มนี้บันทึกทีเดียวทั้งชุด
+  // ยอดก่อนหัก default = ยอดที่เข้าบัญชีจริง (แก้ทีหลังได้ที่หน้าวางแผนถ้าสลิปมีรายการหัก)
+  // ยิง POST /api/income-records เดิมทีละรายการ ซึ่ง reconcileIncome ให้ท้ายสุดอยู่แล้ว จึงจับคู่เองทันที
+  const recordAllIncome = async () => {
+    if (!summary) return;
+    setRecording(true);
+    const failed: string[] = [];
+    for (const txn of summary.unrecorded_income_txns) {
+      try {
+        await post('/api/income-records', {
+          month: txn.txn_date.slice(0, 7),
+          name: txn.description.slice(0, 120),
+          gross_amount_satang: txn.amount_satang,
+          bank_account_id: txn.bank_account_id,
+          income_date: txn.txn_date,
+          auto_match: true,
+          deductions: [],
+        });
+      } catch (e) {
+        failed.push(`${txn.txn_date}: ${e instanceof Error ? e.message : 'ไม่สำเร็จ'}`);
+      }
+    }
+    setRecording(false);
+    setNotice(
+      failed.length === 0
+        ? { message: 'บันทึกเป็นรายได้เต็มแล้วทั้งหมด', severity: 'success' }
+        : { message: `บันทึกไม่สำเร็จ ${failed.length} รายการ: ${failed[0]}`, severity: 'error' },
+    );
+    setRevision((n) => n + 1);
   };
 
   const calculate = async () => {
@@ -140,6 +172,38 @@ export default function TaxSummary() {
 
       {loading ? <TableSkeleton rows={4} /> : summary && (
         <>
+          {summary.unrecorded_income_txns.length > 0 && (
+            <Alert
+              severity="warning"
+              sx={{ mt: 3 }}
+              action={
+                <Button size="small" variant="contained" disabled={recording} onClick={() => void recordAllIncome()}>
+                  {recording ? 'กำลังบันทึก…' : `บันทึกทั้งหมด (${summary.unrecorded_income_txns.length})`}
+                </Button>
+              }
+            >
+              <Typography sx={{ fontWeight: 650, mb: 0.5 }}>
+                เจอเงินเข้า {summary.unrecorded_income_txns.length} รายการที่ยังไม่ได้นับเป็นรายได้
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                กด "บันทึกทั้งหมด" แล้วยอดจะขึ้นในหน้านี้ทันที (ใช้ยอดที่เข้าบัญชีจริงเป็นยอดก่อนหัก —
+                ถ้าสลิปมีหักประกันสังคม/ภาษี ณ ที่จ่าย ค่อยไปเติมทีหลังที่หน้าวางแผนได้)
+              </Typography>
+              <Stack spacing={0.25}>
+                {summary.unrecorded_income_txns.slice(0, 5).map((txn) => (
+                  <Typography key={txn.id} variant="body2" sx={dataTextSx}>
+                    {formatDate(txn.txn_date)} · {txn.account_nickname} · <Money satang={txn.amount_satang} tone="income" />
+                  </Typography>
+                ))}
+                {summary.unrecorded_income_txns.length > 5 && (
+                  <Typography variant="body2" color="text.secondary">
+                    และอีก {summary.unrecorded_income_txns.length - 5} รายการ
+                  </Typography>
+                )}
+              </Stack>
+            </Alert>
+          )}
+
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', mt: 3 }}>
             <SummaryCard title="เงินได้จากงานประจำ" value={<Money satang={summary.inputs.employmentIncomeSatang} tone="income" />} caption="income_record ของ Tax Entity นี้ในปีภาษีนี้" />
             <SummaryCard

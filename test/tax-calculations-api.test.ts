@@ -374,6 +374,47 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     assert.equal(body.inputs.withholdingSatang, 1000000, 'withholding ต้องรวมทั้งสองแถว');
   });
 
+  await t.test('ระบบเสนอเงินเข้าที่ยังไม่ได้บันทึกเป็นรายได้ และเลิกเสนอเมื่อบันทึกแล้ว', async () => {
+    const res = await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`);
+    const body = (await res.json()) as any;
+    const ids = body.unrecorded_income_txns.map((r: { id: number }) => r.id);
+    // เงินเดือนที่ผูก income_record ไว้แล้วต้องไม่ถูกเสนอซ้ำ และรายการที่ tag business_income แล้วก็ไม่ต้องเสนอ
+    assert.ok(!ids.includes(businessIncomeTxn), 'รายการที่ tag business_income แล้วต้องไม่ถูกเสนอ');
+    assert.ok(!ids.includes(businessExpenseTxn), 'เงินออกต้องไม่ถูกเสนอเป็นรายได้');
+
+    // เพิ่มเงินเข้าใหม่ที่ยังไม่ได้ทำอะไรเลย → ต้องถูกเสนอ
+    const freshCredit = await insertTxn(9900000, 'credit', '2026-10-05');
+    const after = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
+    const freshIds = after.unrecorded_income_txns.map((r: { id: number }) => r.id);
+    assert.ok(freshIds.includes(freshCredit), 'เงินเข้าที่ยังไม่มี income_record ต้องถูกเสนอ');
+
+    // จับคู่ income_record กับรายการนั้นแล้ว → ต้องหายจากรายการที่เสนอ
+    const plan = (
+      await db.pool.query<{ id: number }>(`insert into monthly_plan (user_id, month_start) values ($1, '2026-10-01') returning id`, [userA])
+    ).rows[0]!.id;
+    const item = (
+      await db.pool.query<{ id: number }>(
+        `insert into monthly_plan_item (monthly_plan_id, kind, name, planned_amount_satang) values ($1, 'income', 'รายได้ ต.ค.', 9900000) returning id`,
+        [plan],
+      )
+    ).rows[0]!.id;
+    await db.pool.query(
+      `insert into income_record (user_id, monthly_plan_id, monthly_plan_item_id, name, gross_amount_satang, expected_net_satang, bank_account_id, income_date)
+       values ($1, $2, $3, 'รายได้ ต.ค.', 9900000, 9900000, $4, '2026-10-05')`,
+      [userA, plan, item, bankAccountId],
+    );
+    await db.pool.query(
+      `insert into monthly_item_payment (monthly_plan_item_id, amount_satang, paid_date, bank_account_id, txn_id, status, verified_at)
+       values ($1, 9900000, '2026-10-05', $2, $3, 'matched', now())`,
+      [item, bankAccountId, freshCredit],
+    );
+
+    const done = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
+    const doneIds = done.unrecorded_income_txns.map((r: { id: number }) => r.id);
+    assert.ok(!doneIds.includes(freshCredit), 'บันทึกเป็นรายได้แล้วต้องเลิกเสนอ');
+    assert.equal(done.inputs.employmentIncomeSatang, 50000000 + 9900000, 'ยอดต้องเข้าเงินได้จากงานประจำ');
+  });
+
   // ผู้ใช้ส่วนใหญ่มี Tax Entity เดียว — ไม่ควรบังคับให้ไปตั้ง default ที่หน้าบัญชีก่อนตัวเลขถึงจะขึ้น
   await t.test('มี Tax Entity เดียว → ธุรกรรม/รายได้ที่ไม่ได้ผูก entity ไว้ต้องตกมาที่ entity นั้นเอง', async () => {
     const soloUser = (

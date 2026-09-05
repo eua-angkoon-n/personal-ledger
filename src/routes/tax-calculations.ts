@@ -147,6 +147,48 @@ async function employmentIncomeRecords(userId: number, taxEntityId: number, taxY
   return rows;
 }
 
+export type UnrecordedIncomeTxn = {
+  id: number;
+  txn_date: string;
+  description: string;
+  amount_satang: number;
+  bank_account_id: number;
+  account_nickname: string;
+};
+
+/**
+ * เงินเข้าที่ "น่าจะเป็นรายได้" แต่ยังไม่มี income_record รองรับ — ระบบหาให้เอง ผู้ใช้กดปุ่มเดียวจบ
+ *
+ * ทำไมไม่สร้าง income_record ให้เงียบ ๆ เลย: ภาษีต้องใช้ยอด**ก่อนหัก** แต่ statement เห็นแค่ยอดหลังหัก
+ * (ADR-0002 ข้อ 5) ถ้าระบบเดา gross = ยอดที่เข้าบัญชี ตัวเลขภาษีจะต่ำกว่าจริงและภาษีหัก ณ ที่จ่ายหายไป
+ * ทั้งคู่แบบเงียบ ๆ — ตามแนวเดียวกับ transfer_match ของ 4A คือระบบ "เสนอ" คนเป็นคน "ยืนยัน"
+ *
+ * ตัดออก: คู่โอนภายใน/excluded (ไม่ใช่รายได้), รายการที่ tag business_income แล้ว (นับไปแล้วอีกทาง),
+ * และรายการที่มี income_record จับคู่อยู่แล้ว (กันเสนอซ้ำของที่บันทึกไปแล้ว)
+ */
+async function unrecordedIncomeTxns(userId: number, taxEntityId: number, taxYearCE: number): Promise<UnrecordedIncomeTxn[]> {
+  const { rows } = await query<UnrecordedIncomeTxn>(
+    `select t.id, t.txn_date, t.description, t.amount_satang, t.bank_account_id, a.nickname as account_nickname
+     from txn t
+     join bank_account a on a.id = t.bank_account_id
+     left join txn_annotation an on an.txn_id = t.id
+     where a.user_id = $1 and t.direction = 'credit'
+       and (${EFFECTIVE_TAX_ENTITY_SQL}) = $2 and extract(year from t.txn_date) = $3
+       and not t.is_internal_transfer
+       and coalesce(an.classification, '') not in ('internal_transfer', 'excluded')
+       and an.tax_treatment is distinct from 'business_income'
+       and not exists (
+         select 1 from monthly_item_payment p
+         join income_record ir on ir.monthly_plan_item_id = p.monthly_plan_item_id
+         where p.txn_id = t.id and p.status = 'matched'
+       )
+     order by t.txn_date desc
+     limit 100`,
+    [userId, taxEntityId, taxYearCE],
+  );
+  return rows;
+}
+
 const MISSING_DOC_SAMPLE_LIMIT = 100;
 
 export type UnlinkedBusinessTxnSample = { id: number; txn_date: string; description: string; amount_satang: number };
@@ -261,7 +303,10 @@ async function buildSummary(userId: number, taxYearCE: number, taxEntityId: numb
     estimateUnavailableReason = 'นิติบุคคล/กิจการเจ้าของคนเดียวใช้ระบบภาษีนิติบุคคลคนละแบบ ยังไม่รองรับการประมาณการในเฟสนี้ — แสดงได้เฉพาะยอดสรุป';
   }
 
-  const employmentIncomeRecordsList = await employmentIncomeRecords(userId, taxEntityId, taxYearCE);
+  const [employmentIncomeRecordsList, unrecordedIncome] = await Promise.all([
+    employmentIncomeRecords(userId, taxEntityId, taxYearCE),
+    unrecordedIncomeTxns(userId, taxEntityId, taxYearCE),
+  ]);
 
   return {
     tax_year: taxYearCE,
@@ -273,6 +318,7 @@ async function buildSummary(userId: number, taxYearCE: number, taxEntityId: numb
     estimate_unavailable_reason: estimateUnavailableReason,
     missing_document: missingDocument,
     employment_income_records: employmentIncomeRecordsList,
+    unrecorded_income_txns: unrecordedIncome,
     drilldown_params: drilldownParams(taxEntityId, taxYearCE),
   };
 }
