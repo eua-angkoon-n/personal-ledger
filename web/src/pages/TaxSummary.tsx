@@ -50,6 +50,7 @@ export default function TaxSummary() {
   const [recording, setRecording] = useState(false);
   const [unchecked, setUnchecked] = useState<number[]>([]);
   const [addIncomeOpen, setAddIncomeOpen] = useState(false);
+  const [editingIncome, setEditingIncome] = useState<{ id: number; month: string } | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
 
   useEffect(() => {
@@ -258,15 +259,14 @@ export default function TaxSummary() {
 
           {summary.employment_income_records.length > 0 && (
             <Box sx={{ mt: 2 }}>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>ที่มาของ "เงินได้จากงานประจำ" — คลิกดูรายการในหน้าแผนของเดือนนั้น</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>ที่มาของ "เงินได้จากงานประจำ" — คลิกเพื่อแก้ยอด</Typography>
               <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
                 {summary.employment_income_records.map((r) => (
                   <Chip
                     key={r.id}
-                    component={Link}
-                    to={`/planning?month=${r.month_start.slice(0, 7)}`}
                     clickable
                     variant="outlined"
+                    onClick={() => setEditingIncome({ id: r.id, month: r.month_start.slice(0, 7) })}
                     label={<>{r.name} ({r.income_date ? formatDate(r.income_date) : r.month_start.slice(0, 7)}): <Money satang={r.gross_amount_satang} /></>}
                   />
                 ))}
@@ -394,15 +394,31 @@ export default function TaxSummary() {
       {entity?.entity_type !== 'individual' && summary && (
         <Alert severity="info" sx={{ mt: 3 }}>{summary.estimate_unavailable_reason}</Alert>
       )}
-      <IncomeQuickAddModal
-        open={addIncomeOpen}
-        accounts={accounts}
-        onClose={() => setAddIncomeOpen(false)}
-        onCreated={() => {
-          setNotice({ message: 'เพิ่มรายได้เต็มแล้ว', severity: 'success' });
-          setRevision((n) => n + 1);
-        }}
-      />
+      {/* render เฉพาะตอนเปิด — กันค่าที่พิมพ์ไว้รอบก่อนค้างอยู่ในฟอร์มรอบถัดไป */}
+      {addIncomeOpen && (
+        <IncomeQuickAddModal
+          open
+          accounts={accounts}
+          onClose={() => setAddIncomeOpen(false)}
+          onSaved={() => {
+            setNotice({ message: 'เพิ่มรายได้เต็มแล้ว', severity: 'success' });
+            setRevision((n) => n + 1);
+          }}
+        />
+      )}
+      {editingIncome && (
+        <IncomeQuickAddModal
+          key={editingIncome.id}
+          open
+          incomeRecordId={editingIncome.id}
+          month={editingIncome.month}
+          onClose={() => setEditingIncome(null)}
+          onSaved={() => {
+            setNotice({ message: 'แก้ไขรายได้แล้ว', severity: 'success' });
+            setRevision((n) => n + 1);
+          }}
+        />
+      )}
       <FeedbackSnackbar notice={notice} onClose={() => setNotice(null)} />
     </Box>
   );

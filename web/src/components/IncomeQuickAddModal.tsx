@@ -1,23 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Button, MenuItem, Stack, TextField, Typography } from '@mui/material';
-import { post, type Account, type TxnDetail } from '../api.js';
+import { patch, post, req, type Account, type IncomeRecord, type TxnDetail } from '../api.js';
 import Modal from '../Modal.js';
 import { formatBaht, parseBahtToSatang } from '../format.js';
 import Money from './Money.js';
 
-// สร้าง "รายได้เต็ม" (income_record) ได้สองทาง:
-//   - จากธุรกรรมที่เปิดดูอยู่ (txn) — ยอด/บัญชี/วันที่ prefill มาให้ ผู้ใช้ไม่ต้องพิมพ์ซ้ำ
-//   - กรอกเอง (ไม่มี txn) — สำหรับรายได้ที่ไม่มีเงินเข้าบัญชีให้จับคู่ เช่น เงินสด หรือบัญชีที่ไม่ได้ import
+// สร้าง/แก้ไข "รายได้เต็ม" (income_record) ได้จากทุกที่ที่ผู้ใช้อยู่ ไม่ต้องข้ามไปหน้าวางแผน:
+//   - จากธุรกรรม (txn) — ยอด/บัญชี/วันที่ prefill มาให้ และผูกกับเงินเข้าก้อนนั้นตรง ๆ (กันบันทึกซ้ำ)
+//   - กรอกเอง — สำหรับรายได้ที่ไม่มีเงินเข้าบัญชีให้จับคู่ เช่น เงินสด
+//   - แก้ไขของเดิม (incomeRecordId) — เผื่อใส่ยอดก่อนหักผิด
 //
 // ยอดเต็มคือยอดก่อนหัก ธนาคารเห็นแค่ยอดหลังหัก (ADR-0002 ข้อ 5) จึงต้องให้ผู้ใช้ยืนยันเอง
-// ไม่มี endpoint ใหม่: POST /api/income-records เดิมสร้าง monthly_plan ให้เองถ้ายังไม่มี และเรียก
-// reconcileIncome ท้ายสุดอยู่แล้ว ยอดที่ตรงกันจึงถูกจับคู่กับเงินเข้าอัตโนมัติ
+// ไม่มี endpoint ใหม่: ใช้ POST/PATCH /api/income-records เดิม ซึ่งเรียก reconcileIncome ท้ายสุดอยู่แล้ว
 type Props = {
   open: boolean;
   onClose: () => void;
-  onCreated: () => void;
+  onSaved: () => void;
   /** มา = โหมด "จากธุรกรรมนี้" (ล็อกบัญชี/วันที่ตามธุรกรรม), ไม่มา = โหมดกรอกเอง */
   txn?: TxnDetail;
+  /** มา = โหมดแก้ไขรายได้ที่บันทึกไว้แล้ว (ต้องมาคู่กับ month เพื่อโหลดค่าเดิม) */
+  incomeRecordId?: number;
+  month?: string;
   /** ใช้เฉพาะโหมดกรอกเอง — ให้เลือกบัญชีรับเงินได้ (ไม่บังคับ) */
   accounts?: Account[];
 };
@@ -31,15 +34,48 @@ function todayInBangkok(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
-export default function IncomeQuickAddModal({ open, onClose, onCreated, txn, accounts = [] }: Props) {
+function sumOfType(record: IncomeRecord | null, type: string): string {
+  if (!record) return '';
+  const total = record.deductions.filter((d) => d.deduction_type === type).reduce((s, d) => s + d.amount_satang, 0);
+  return total > 0 ? formatBaht(total) : '';
+}
+
+export default function IncomeQuickAddModal({ open, onClose, onSaved, txn, incomeRecordId, month, accounts = [] }: Props) {
+  const editing = incomeRecordId != null;
   const [name, setName] = useState(txn ? 'เงินเดือน' : '');
   const [gross, setGross] = useState(txn ? formatBaht(txn.amount_satang) : '');
   const [incomeDate, setIncomeDate] = useState(txn ? txn.txn_date : todayInBangkok());
   const [accountId, setAccountId] = useState(txn ? String(txn.bank_account_id) : '');
   const [socialSecurity, setSocialSecurity] = useState('');
   const [withholding, setWithholding] = useState('');
+  const [existing, setExisting] = useState<IncomeRecord | null>(null);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // โหมดแก้ไข: ดึงค่าเดิมมาเติมฟอร์ม (ไม่มี GET /income-records/:id — ดึงทั้งเดือนแล้วหาเอา)
+  useEffect(() => {
+    if (!editing || !month) return;
+    let current = true;
+    setLoading(true);
+    req<{ rows: IncomeRecord[] }>(`/api/income-records?month=${month}`)
+      .then((data) => {
+        if (!current) return;
+        const row = data.rows.find((r) => r.id === incomeRecordId) ?? null;
+        setExisting(row);
+        if (row) {
+          setName(row.name);
+          setGross(formatBaht(row.gross_amount_satang));
+          setIncomeDate(row.income_date ?? todayInBangkok());
+          setAccountId(row.bank_account_id == null ? '' : String(row.bank_account_id));
+          setSocialSecurity(sumOfType(row, 'social_security'));
+          setWithholding(sumOfType(row, 'withholding_tax'));
+        }
+      })
+      .catch((e: Error) => { if (current) setError(e.message); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [editing, incomeRecordId, month]);
 
   const grossSatang = amountOrNull(gross);
   const ssSatang = amountOrNull(socialSecurity);
@@ -59,23 +95,39 @@ export default function IncomeQuickAddModal({ open, onClose, onCreated, txn, acc
     setBusy(true);
     setError('');
     try {
+      // รายการหักประเภทอื่น (เช่น 'other' ที่เพิ่มไว้จากหน้าวางแผน) ส่งกลับไปตามเดิม ไม่ให้หายไปเงียบ ๆ
+      const preserved = (existing?.deductions ?? [])
+        .filter((d) => d.deduction_type !== 'social_security' && d.deduction_type !== 'withholding_tax')
+        .map((d) => ({
+          deduction_type: d.deduction_type,
+          name: d.name,
+          amount_satang: d.amount_satang,
+          monthly_plan_item_id: d.monthly_plan_item_id,
+        }));
       const deductions = [
         ...(ssSatang > 0 ? [{ deduction_type: 'social_security', name: 'ประกันสังคม', amount_satang: ssSatang }] : []),
         ...(whSatang > 0 ? [{ deduction_type: 'withholding_tax', name: 'ภาษีหัก ณ ที่จ่าย', amount_satang: whSatang }] : []),
+        ...preserved,
       ];
-      await post('/api/income-records', {
-        month: incomeDate.slice(0, 7),
-        name,
-        gross_amount_satang: grossSatang,
-        bank_account_id: accountId === '' ? null : Number(accountId),
-        income_date: incomeDate,
-        // ไม่มีบัญชีก็ไม่มีอะไรให้จับคู่ — ปิด auto_match ไม่งั้นค้างสถานะ "รอ statement" ตลอดไป
-        auto_match: accountId !== '',
-        deductions,
-        // ผูกกับเงินเข้าก้อนที่ผู้ใช้กดมาโดยตรง — ฝั่ง API ใช้ตัวนี้กันบันทึกธุรกรรมเดิมซ้ำด้วย
-        ...(txn ? { source_txn_id: txn.id } : {}),
-      });
-      onCreated();
+
+      if (editing) {
+        // ไม่แตะบัญชี/วันที่ตอนแก้ไข — สองอย่างนั้นผูกกับเงินเข้าที่จับคู่ไว้แล้ว
+        await patch(`/api/income-records/${incomeRecordId}`, { name, gross_amount_satang: grossSatang, deductions });
+      } else {
+        await post('/api/income-records', {
+          month: incomeDate.slice(0, 7),
+          name,
+          gross_amount_satang: grossSatang,
+          bank_account_id: accountId === '' ? null : Number(accountId),
+          income_date: incomeDate,
+          // ไม่มีบัญชีก็ไม่มีอะไรให้จับคู่ — ปิด auto_match ไม่งั้นค้างสถานะ "รอ statement" ตลอดไป
+          auto_match: accountId !== '',
+          deductions,
+          // ผูกกับเงินเข้าก้อนที่ผู้ใช้กดมาโดยตรง — ฝั่ง API ใช้ตัวนี้กันบันทึกธุรกรรมเดิมซ้ำด้วย
+          ...(txn ? { source_txn_id: txn.id } : {}),
+        });
+      }
+      onSaved();
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'บันทึกรายได้เต็มไม่สำเร็จ');
@@ -84,25 +136,28 @@ export default function IncomeQuickAddModal({ open, onClose, onCreated, txn, acc
     }
   };
 
+  const title = editing ? 'แก้ไขรายได้เต็ม' : txn ? 'บันทึกเป็นรายได้เต็ม' : 'เพิ่มรายได้เต็มเอง';
+
   return (
-    <Modal open={open} title={txn ? 'บันทึกเป็นรายได้เต็ม' : 'เพิ่มรายได้เต็มเอง'} onClose={onClose} busy={busy}>
+    <Modal open={open} title={title} onClose={onClose} busy={busy}>
       <Stack component="form" spacing={2} onSubmit={(e) => { e.preventDefault(); void save(); }}>
         <Typography variant="body2" color="text.secondary">
           ภาษีต้องใช้ยอด "ก่อนหัก" — ถ้าสลิปเงินเดือนมีหักประกันสังคม/ภาษี ณ ที่จ่าย ให้กรอกเพิ่มด้วย
           {txn && <> ระบบจะจับคู่กับเงินเข้ารายการนี้ (<Money satang={txn.amount_satang} />) ให้เอง</>}
         </Typography>
-        <TextField label="ชื่อรายได้" required value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น เงินเดือน" />
+        <TextField label="ชื่อรายได้" required value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น เงินเดือน" disabled={loading} />
         <TextField
           label="ยอดเต็มก่อนหัก (บาท)" required value={gross} onChange={(e) => setGross(e.target.value)}
+          disabled={loading}
           slotProps={{ htmlInput: { inputMode: 'decimal' } }}
         />
         <TextField
           label="วันที่รับเงิน" type="date" required value={incomeDate} onChange={(e) => setIncomeDate(e.target.value)}
-          disabled={txn != null}
+          disabled={txn != null || editing}
           slotProps={{ inputLabel: { shrink: true } }}
-          helperText={txn != null ? 'ตามวันที่ของธุรกรรม' : undefined}
+          helperText={txn != null ? 'ตามวันที่ของธุรกรรม' : editing ? 'แก้วันที่/บัญชีได้ที่หน้าวางแผน' : undefined}
         />
-        {txn == null && (
+        {txn == null && !editing && (
           <TextField
             select label="บัญชีรับเงิน (ไม่บังคับ)" value={accountId} onChange={(e) => setAccountId(e.target.value)}
             helperText="เลือกบัญชีไว้ ระบบจะจับคู่กับเงินเข้าจริงให้เองเมื่อยอดตรงกัน"
@@ -113,10 +168,12 @@ export default function IncomeQuickAddModal({ open, onClose, onCreated, txn, acc
         )}
         <TextField
           label="ประกันสังคม (บาท, ไม่บังคับ)" value={socialSecurity} onChange={(e) => setSocialSecurity(e.target.value)}
+          disabled={loading}
           slotProps={{ htmlInput: { inputMode: 'decimal' } }}
         />
         <TextField
           label="ภาษีหัก ณ ที่จ่าย (บาท, ไม่บังคับ)" value={withholding} onChange={(e) => setWithholding(e.target.value)}
+          disabled={loading}
           slotProps={{ htmlInput: { inputMode: 'decimal' } }}
         />
         {netSatang != null && (
@@ -126,13 +183,13 @@ export default function IncomeQuickAddModal({ open, onClose, onCreated, txn, acc
         )}
         {txn != null && netSatang != null && !matchesDeposit && (
           <Alert severity="warning">
-            ยอดสุทธิไม่ตรงกับเงินที่เข้าบัญชีจริง — บันทึกได้ แต่ระบบจะยังไม่จับคู่ให้อัตโนมัติ
-            (ยอดเต็ม − รายการหัก ต้องเท่ากับ <Money satang={txn.amount_satang} /> ถึงจะจับคู่เอง)
+            ยอดสุทธิไม่ตรงกับเงินที่เข้าบัญชีจริง — บันทึกได้ แต่จะแสดงว่ายังได้รับไม่ครบ
+            (ยอดเต็ม − รายการหัก ควรเท่ากับ <Money satang={txn.amount_satang} />)
           </Alert>
         )}
         {error && <Alert severity="error">{error}</Alert>}
-        <Button type="submit" variant="contained" disabled={busy} aria-busy={busy}>
-          {busy ? 'กำลังบันทึก…' : 'บันทึกรายได้เต็ม'}
+        <Button type="submit" variant="contained" disabled={busy || loading} aria-busy={busy}>
+          {busy ? 'กำลังบันทึก…' : editing ? 'บันทึกการแก้ไข' : 'บันทึกรายได้เต็ม'}
         </Button>
       </Stack>
     </Modal>

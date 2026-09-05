@@ -224,9 +224,12 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                 <TextField label="โน้ต (ไม่บังคับ)" value={note} onChange={(e) => setNote(e.target.value)} size="small" multiline minRows={2} slotProps={{ htmlInput: { maxLength: 500 } }} />
                 {classification === 'income' && detail.direction === 'credit' && (
                   detail.income_record_id != null ? (
-                    <Alert severity="success">
+                    <Alert
+                      severity="success"
+                      action={<Button size="small" onClick={() => setIncomeModalOpen(true)}>แก้ไขยอด</Button>}
+                    >
                       บันทึกเป็นรายได้เต็มไปแล้ว — นับอยู่ใน "เงินได้จากงานประจำ" ของหน้าภาษี
-                      (แก้ยอดหรือเพิ่มรายการหักได้ที่หน้าวางแผนเดือนนี้)
+                      กด "แก้ไขยอด" ถ้ากรอกยอดก่อนหักผิด
                     </Alert>
                   ) : (
                     <Alert
@@ -404,12 +407,17 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
           </Stack>
         ) : null}
       </Box>
-      {detail && (
+      {/* render เฉพาะตอนเปิด + key ตาม txn — ไม่งั้น state ในฟอร์ม (ยอด/ชื่อ/วันที่) ค้างค่าของธุรกรรม
+          ก่อนหน้าเมื่อสลับแถว เพราะ useState ตั้งค่าเริ่มต้นแค่ตอน mount ครั้งแรกเท่านั้น */}
+      {detail && incomeModalOpen && (
         <IncomeQuickAddModal
+          key={`${detail.id}-${detail.income_record_id ?? 'new'}`}
           txn={detail}
-          open={incomeModalOpen}
+          incomeRecordId={detail.income_record_id ?? undefined}
+          month={detail.txn_date.slice(0, 7)}
+          open
           onClose={() => setIncomeModalOpen(false)}
-          onCreated={() => {
+          onSaved={() => {
             onNotice({ message: 'บันทึกรายได้เต็มแล้ว — ดูยอดได้ที่หน้าภาษี', severity: 'success' });
             void load(detail.id); // ให้ income_record_id อัปเดต ปุ่มจะได้เปลี่ยนเป็น "บันทึกไปแล้ว" ทันที
             onSaved();
