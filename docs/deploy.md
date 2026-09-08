@@ -50,9 +50,10 @@ git pull && docker compose up -d --build
 ```
 
 เสร็จแล้วเปิดเว็บดูเลขมุมล่างขวาว่าตรงกับที่ปล่อยไป ถ้าไม่ตรงคือ build ไม่ได้ขึ้นจริง
+ตรวจจากในคอนเทนเนอร์ได้ (ไม่ต้องยิงผ่านเน็ตเพื่ออ่านเลขเวอร์ชัน):
 
 ```sh
-curl -s https://ledger.tapestopnight.com/api/me | grep -o '"version":"[^"]*"'
+docker compose exec app node -e "import('./dist/version.js').then(m => console.log(m.APP_VERSION))"
 ```
 
 ## ข้อควรระวัง

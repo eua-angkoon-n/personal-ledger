@@ -19,8 +19,12 @@ emailAccountsRouter.post('/email-accounts/:id/sync', requireUser(async (req, res
   if (!owns.rowCount) throw new HttpError(403, 'กล่องอีเมลนี้ไม่ใช่ของคุณ');
   const full = (req.body as Body).full === true;
   const summary = await syncEmailAccount(emailAccountId, { full });
-  // ไม่มี tx ให้เกาะ (sync ทำงานจบไปแล้วและเขียนหลายตารางเอง) — เขียนผ่าน pool เหมือน tax.export
+  // ไม่มี tx ให้เกาะ (sync ทำงานจบไปแล้วและเขียนหลายตารางเอง) — เขียนผ่าน pool
   // เก็บแค่ตัวเลขสรุป ห้ามแตะ refresh_token_enc ของกล่อง
+  //
+  // ponytail: ต่างจาก tax.export ที่อ่านอย่างเดียว — อันนี้ sync เขียน statement/txn ไปแล้วก่อนถึงบรรทัดนี้
+  // โปรเซสตายกลางทาง = ข้อมูลลง แต่แถว audit ไม่ลง ยอมรับได้เพราะแถว statement/txn เองมี created_at
+  // เป็นหลักฐานอยู่ ถ้าวันไหนต้องแน่นจริงต้องให้ doSync รับ client แล้วเขียน audit ใน tx เดียวกัน
   await audit(pool, {
     userId: user.id,
     action: 'email_account.sync',
