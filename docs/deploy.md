@@ -19,7 +19,13 @@ VPS Contabo, Docker Compose ต่อโปรเจกต์, Caddy รัน�
    - scope ที่ขอ: `openid email profile gmail.readonly`
    - **ห้ามเพิ่ม scope `drive`** ลงในไคลเอนต์ตัวนี้ (สำรองข้อมูลใช้ credential คนละตัว)
 
-3. เพิ่มบล็อกใน `Caddyfile` ของโฮสต์ (ดูไฟล์ `Caddyfile` ในรีโปเป็นตัวอย่าง) แล้ว `caddy reload`
+3. โดเมน + TLS (โดเมนอยู่ที่ Cloudflare)
+   - DNS → เพิ่ม record `A` ชี้มาที่ IP ของ VPS **ปิด proxy ไว้ก่อน (เมฆเทา = DNS only)**
+     Caddy ต้องคุยกับ Let's Encrypt ถึงเครื่องตรง ๆ ถึงจะออก cert ได้ เปิด proxy ตั้งแต่แรก ACME จะไม่ผ่าน
+   - เปิดพอร์ตบนโฮสต์ `ufw allow 80,443/tcp` — 80 ต้องเปิดด้วย ACME ใช้ต่ออายุ cert
+   - เพิ่มบล็อกใน `Caddyfile` ของโฮสต์ (ดูไฟล์ `Caddyfile` ในรีโปเป็นตัวอย่าง) แล้ว `caddy reload`
+   - อยากเปิด proxy (เมฆส้ม) ทีหลังได้ แต่ SSL/TLS mode ต้องเป็น **Full (strict)** เท่านั้น
+     ถ้าเป็น Flexible จะเจอ redirect loop เพราะ Caddy บังคับ https อยู่แล้ว
 
 4. เตรียมโฟลเดอร์เก็บ PDF และเอกสารภาษี **ก่อน** `up` ครั้งแรก
 
@@ -43,6 +49,8 @@ git pull && docker compose up -d --build
 
 ## ข้อควรระวัง
 
+- `app` รันด้วย `NODE_ENV=production` → session cookie เป็น `secure` ใช้ได้เฉพาะเมื่อเข้าผ่าน https ของ Caddy
+  เท่านั้น ยิงตรงเข้า `http://127.0.0.1:3001` แล้วล็อกอินไม่ติดเป็นเรื่องปกติ ไม่ใช่บั๊ก
 - `db` ไม่ publish port โดยตั้งใจ ถ้าจะต่อดูข้อมูล ใช้ `docker compose exec db psql -U ledger ledger`
 - `app` publish ที่ `127.0.0.1:3001` เท่านั้น กฎ iptables ของ Docker **ข้าม UFW** ถ้าเผลอเขียนเป็น `3001:3000` เฉย ๆ เท่ากับเปิดพอร์ตสู่อินเทอร์เน็ต
 - สำรองข้อมูล: `pg_dump` → **เข้ารหัสก่อนอัปโหลด** ผ่าน `rclone crypt` remote และใช้ credential ของ rclone แยกจากแอป (คนละบัญชี Google ยิ่งดี)
