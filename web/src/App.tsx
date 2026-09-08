@@ -107,19 +107,12 @@ function AuthPanel({ children }: { children: ReactNode }) {
 export default function App() {
   const routerLocation = useLocation();
   const [user, setUser] = useState<User | null | undefined>(undefined);
-  const [signupInviteRequired, setSignupInviteRequired] = useState(false);
-  const [invite, setInvite] = useState('');
-  const [inviteError, setInviteError] = useState('');
-  const [submittingInvite, setSubmittingInvite] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
-    req<{ user: User | null; signupInviteRequired: boolean }>('/api/me')
-      .then((response) => {
-        setUser(response.user);
-        setSignupInviteRequired(response.signupInviteRequired);
-      })
+    req<{ user: User | null }>('/api/me')
+      .then((response) => setUser(response.user))
       .catch(() => setUser(null));
   }, []);
 
@@ -148,49 +141,6 @@ export default function App() {
   }
 
   if (!user) {
-    if (signupInviteRequired) {
-      return (
-        <AuthPanel>
-          <Stack
-            component="form"
-            spacing={3}
-            onSubmit={async (event) => {
-              event.preventDefault();
-              setInviteError('');
-              setSubmittingInvite(true);
-              try {
-                await post('/auth/signup', { inviteCode: invite });
-                location.reload();
-              } catch (error) {
-                setInviteError(error instanceof Error ? error.message : 'สมัครสมาชิกไม่สำเร็จ');
-                setSubmittingInvite(false);
-              }
-            }}
-          >
-            <Box>
-              <Typography variant="h1">สมัครสมาชิก</Typography>
-              <Typography color="text.secondary" sx={{ mt: 1, ...descriptionSx }}>
-                ยืนยันบัญชี Google สำเร็จแล้ว กรุณากรอกรหัสเชิญเพื่อเริ่มใช้งาน
-              </Typography>
-            </Box>
-            <TextField
-              label="รหัสเชิญ"
-              value={invite}
-              onChange={(event) => setInvite(event.target.value)}
-              autoComplete="one-time-code"
-              autoFocus
-              required
-              fullWidth
-            />
-            {inviteError && <Alert severity="error">{inviteError}</Alert>}
-            <Button type="submit" variant="contained" disabled={submittingInvite} aria-busy={submittingInvite}>
-              {submittingInvite ? 'กำลังสมัคร…' : 'สมัครสมาชิก'}
-            </Button>
-          </Stack>
-        </AuthPanel>
-      );
-    }
-
     return (
       <AuthPanel>
         <Stack spacing={3} sx={{ alignItems: 'center', textAlign: 'center' }}>

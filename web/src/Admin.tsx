@@ -334,7 +334,7 @@ function Users({ currentUserId }: { currentUserId: number }) {
         <EmptyState
           icon={<GroupRounded sx={{ fontSize: 40 }} />}
           title="ยังไม่มีผู้ใช้งาน"
-          description="สมาชิกจะปรากฏที่นี่หลังจากเข้าสู่ระบบด้วย Google และยืนยันรหัสเชิญ"
+          description="สมาชิกจะปรากฏที่นี่หลังจากเข้าสู่ระบบด้วย Google รอให้แอดมินอนุมัติ"
         />
       ) : <TableContainer component={Paper} variant="outlined" tabIndex={0} sx={{ mt: 3 }}>
         <Table size="small" aria-label="ผู้ใช้งาน" sx={{ minWidth: 760 }}>

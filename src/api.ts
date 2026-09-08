@@ -23,10 +23,7 @@ export const api = Router();
 
 api.get('/me', async (req, res, next) => {
   try {
-    res.json({
-      user: await loadUser(req),
-      signupInviteRequired: req.session.pendingSignup != null,
-    });
+    res.json({ user: await loadUser(req) });
   } catch (e) {
     next(e);
   }

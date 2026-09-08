@@ -8,7 +8,6 @@ VPS Contabo, Docker Compose ต่อโปรเจกต์, Caddy รัน�
    ```sh
    openssl rand -hex 32   # ENCRYPTION_KEY
    openssl rand -hex 32   # SESSION_SECRET
-   openssl rand -hex 16   # SIGNUP_INVITE_CODE
    chmod 600 .env
    ```
    **`ENCRYPTION_KEY` หายคือถอด refresh token และรหัสผ่าน PDF เก่าไม่ได้อีกเลย**
@@ -38,7 +37,7 @@ VPS Contabo, Docker Compose ต่อโปรเจกต์, Caddy รัน�
 
 5. `docker compose up -d --build` — migration รันเองตอนแอปบูต
 
-6. ล็อกอินด้วยอีเมลที่ตั้งไว้ใน `ADMIN_EMAIL` พร้อมรหัสเชิญ → ได้สิทธิ์แอดมิน + อนุมัติอัตโนมัติ
+6. ล็อกอินด้วยอีเมลที่ตั้งไว้ใน `ADMIN_EMAIL` → ได้สิทธิ์แอดมิน + อนุมัติอัตโนมัติ
    คนอื่นล็อกอินได้แต่จะเป็น `pending` จนแอดมินกดอนุมัติ
 
 ## อัปเดต
