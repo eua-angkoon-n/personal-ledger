@@ -145,14 +145,22 @@ authRouter.get('/google/callback', async (req, res, next) => {
         grant_type: 'authorization_code',
       }),
     });
-    if (!tokenRes.ok) return void res.status(502).send('แลก token กับ Google ไม่สำเร็จ');
+    // ต้อง log body ของ Google ด้วย — ข้อความ 502 ที่ผู้ใช้เห็นไม่บอกว่า invalid_client,
+    // redirect_uri_mismatch หรือ code หมดอายุ ซึ่งเป็นสามอย่างที่ต้องรู้เพื่อแก้ (body ไม่มี secret)
+    if (!tokenRes.ok) {
+      console.error('token exchange ล้มเหลว', tokenRes.status, await tokenRes.text());
+      return void res.status(502).send('แลก token กับ Google ไม่สำเร็จ');
+    }
     const token = (await tokenRes.json()) as { access_token: string; refresh_token?: string };
 
     // ถาม userinfo แทนการถอด id_token เอง — ไม่ต้องตรวจลายเซ็น JWT เองให้พลาด
     const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { authorization: `Bearer ${token.access_token}` },
     });
-    if (!infoRes.ok) return void res.status(502).send('อ่านข้อมูลผู้ใช้จาก Google ไม่สำเร็จ');
+    if (!infoRes.ok) {
+      console.error('userinfo ล้มเหลว', infoRes.status, await infoRes.text());
+      return void res.status(502).send('อ่านข้อมูลผู้ใช้จาก Google ไม่สำเร็จ');
+    }
     const info = (await infoRes.json()) as { sub: string; email: string; name?: string };
 
     // ต่อกล่องเพิ่ม: ผูกเข้ากับผู้ใช้ใน session ไม่ใช่หา app_user จาก google_sub
