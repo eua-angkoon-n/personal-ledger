@@ -24,7 +24,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://ledger:${POSTGRES_PASSWORD}@db:5432/ledger
-      NODE_ENV: development
+      # secure cookie เปิดตามค่านี้ (src/server.ts) — ต้องมี TLS ที่ Caddy ก่อน
+      # ไม่มี TLS แล้วตั้ง production = เบราว์เซอร์ทิ้ง cookie ล็อกอินวนไม่จบแบบไม่มี error
+      NODE_ENV: production
       PDF_STORAGE_DIR: /app/data/pdf
       TAX_DOC_STORAGE_DIR: /app/data/tax-docs
       # ponytail: เดียวกับ db — ครอบครัวเดียวโซนเวลาเดียวพอ, per-user tz ค่อยทำถ้าจำเป็นจริง

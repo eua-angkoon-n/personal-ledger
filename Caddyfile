@@ -1,5 +1,5 @@
 # วางบล็อกนี้ใน Caddyfile ของโฮสต์ (Caddy รันบนโฮสต์ ไม่ได้อยู่ใน compose)
-ledger.example.com {
+ledger.tapestopnight.com {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:3001
 }
