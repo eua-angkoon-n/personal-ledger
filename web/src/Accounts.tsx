@@ -156,7 +156,7 @@ export default function Accounts() {
           action={<Button variant="contained" startIcon={<AddRounded />} onClick={openAdd}>เพิ่มบัญชีแรก</Button>}
         />
       ) : (
-        <TableContainer component={Paper} variant="outlined" tabIndex={0} sx={{ mt: 3 }}>
+        <TableContainer component={Paper} variant="outlined" tabIndex={0} sx={{ mt: 3 }} data-tour="accounts-table">
           <Table size="small" aria-label="บัญชีธนาคารของฉัน" sx={{ minWidth: 780 }}>
             <TableHead>
               <TableRow>

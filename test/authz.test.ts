@@ -10,6 +10,9 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import session from 'express-session';
 import { createTestDb } from './helpers/db.js';
 
+// ข้อ 44 สร้างบัญชีธนาคารผ่าน API จริง ซึ่งเข้ารหัสรหัสผ่าน PDF — ต้องมีคีย์ dummy เหมือน test อื่น
+process.env.ENCRYPTION_KEY ??= '0'.repeat(64);
+
 test('cross-user authorization: Slice 4A endpoints', async (t) => {
   const db = await createTestDb();
   if (db.skip) {
@@ -834,5 +837,60 @@ test('cross-user authorization: Slice 4A endpoints', async (t) => {
     const res = await request('/api/audit-log?entity_type=tax_deduction_claim');
     const body = (await res.json()) as { rows: { entity_id: number }[] };
     assert.ok(!body.rows.some((r) => r.entity_id === claimIdOfB));
+  });
+
+  await t.test('42. GET /api/audit-log?scope=all — คนทั่วไปได้ 403 ไม่ใช่ผลลัพธ์ว่าง', async () => {
+    await loginAs(userA);
+    assert.equal((await request('/api/audit-log?scope=all')).status, 403);
+    // ระบุ user_id ของคนอื่นก็ต้อง 403 เหมือนกัน (ไม่ใช่เงียบ ๆ คืนของตัวเอง)
+    assert.equal((await request(`/api/audit-log?user_id=${userB}`)).status, 403);
+    // ระบุ user_id ของตัวเองยังได้ปกติ
+    assert.equal((await request(`/api/audit-log?user_id=${userA}`)).status, 200);
+    // scope ค่าอื่นเป็น 400 ไม่ใช่ตกไปเป็น self เงียบ ๆ
+    assert.equal((await request('/api/audit-log?scope=everything')).status, 400);
+  });
+
+  await t.test('43. GET /api/audit-log?scope=all — แอดมินเห็นข้ามผู้ใช้ได้ และ default ยังเป็นของตัวเอง', async () => {
+    await loginAs(admin);
+    const scoped = await request('/api/audit-log?scope=all&entity_type=tax_deduction_claim');
+    assert.equal(scoped.status, 200);
+    const scopedBody = (await scoped.json()) as { rows: { entity_id: number; user_id: number; user_email: string }[] };
+    const rowOfB = scopedBody.rows.find((r) => r.entity_id === claimIdOfB);
+    assert.ok(rowOfB, 'แอดมินต้องเห็นแถวของ B เมื่อขอ scope=all');
+    assert.equal(rowOfB.user_id, userB);
+    assert.equal(rowOfB.user_email, 'b@example.com');
+
+    // ไม่ส่ง scope = ของตัวเองเท่านั้น ต้องไม่กลายเป็นมุมมองรวมทุกคนโดยอัตโนมัติเพราะเป็นแอดมิน
+    const selfBody = (await (await request('/api/audit-log?entity_type=tax_deduction_claim')).json()) as { rows: { user_id: number }[] };
+    assert.ok(selfBody.rows.every((r) => r.user_id === admin));
+
+    // เจาะจง user_id ชนะ scope=all
+    const onlyB = (await (await request(`/api/audit-log?scope=all&user_id=${userB}`)).json()) as { rows: { user_id: number }[] };
+    assert.ok(onlyB.rows.length > 0 && onlyB.rows.every((r) => r.user_id === userB));
+  });
+
+  await t.test('44. audit_log ห้ามมีความลับ — สร้าง/แก้บัญชีธนาคารแล้วรหัสผ่าน PDF ต้องไม่หลุดเข้า log', async () => {
+    await loginAs(userA);
+    const created = await request('/api/accounts', post({
+      bank_id: bankId, email_account_id: emailA, nickname: 'บัญชีลับ',
+      account_number: '111-1-99999-9', pdf_password: 'ลับสุดยอด-1234',
+    }));
+    assert.equal(created.status, 201);
+    const accountId = ((await created.json()) as { id: number }).id;
+    const patched = await request(`/api/accounts/${accountId}`, json({ pdf_password: 'ลับใหม่-5678' }));
+    assert.equal(patched.status, 200);
+
+    // ตรวจที่ตาราง ไม่ใช่แค่ response — คอลัมน์ ciphertext ก็ห้ามอยู่ใน before/after
+    const logged = await db.pool.query<{ payload: string }>(
+      `select coalesce(before_data::text, '') || coalesce(after_data::text, '') as payload
+       from audit_log where entity_type = 'bank_account' and entity_id = $1`,
+      [accountId],
+    );
+    assert.ok(logged.rows.length >= 2, 'ต้องมีทั้ง bank_account.create และ bank_account.update');
+    for (const { payload } of logged.rows) {
+      assert.ok(!payload.includes('ลับสุดยอด-1234'), 'รหัสผ่าน PDF ดิบหลุดเข้า audit_log');
+      assert.ok(!payload.includes('ลับใหม่-5678'), 'รหัสผ่าน PDF ดิบหลุดเข้า audit_log');
+      assert.ok(!payload.includes('pdf_password_enc'), 'ciphertext ของรหัสผ่าน PDF หลุดเข้า audit_log');
+    }
   });
 });

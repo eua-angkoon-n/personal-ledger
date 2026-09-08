@@ -8,6 +8,7 @@ process.env.DATABASE_URL ??= 'postgres://unused:unused@127.0.0.1:5432/unused';
 
 const { createAuthRouter } = await import('../src/auth.js');
 const { api } = await import('../src/api.js');
+const { APP_VERSION } = await import('../src/version.js');
 
 const authEnv = {
   googleClientId: 'client-id',
@@ -86,7 +87,8 @@ test('ผู้ใช้ Google ใหม่ถูกสร้างทันท
   t.after(app.close);
 
   const initialMe = await app.request('/api/me');
-  assert.deepEqual(await initialMe.json(), { user: null });
+  // /me ส่ง version มาด้วยตั้งแต่ยังไม่ล็อกอิน — เว็บใช้ค่านี้แสดงเลขเวอร์ชันบนหน้าเข้าสู่ระบบ
+  assert.deepEqual(await initialMe.json(), { user: null, version: APP_VERSION });
 
   // ไม่ล็อกอิน + endpoint ที่ย้ายไป src/routes/admin.ts ต้องยัง mount อยู่จริง (401 ไม่ใช่ 404 จาก fallback)
   const parserKeys = await app.request('/api/admin/parser-keys');

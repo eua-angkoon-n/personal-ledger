@@ -85,7 +85,9 @@ incomeRecordsRouter.post(
       if (sourceTxnId != null) await assertTxnNotRecordedAsIncome(c, user.id, sourceTxnId);
       const recordId = await saveIncome(c, user.id, req.body);
       if (sourceTxnId != null) await linkIncomeToTxn(c, user.id, recordId, sourceTxnId);
-      return (await incomeRows(c, user.id, undefined, recordId))[0];
+      const row = (await incomeRows(c, user.id, undefined, recordId))[0];
+      await audit(c, { userId: user.id, action: "income_record.create", entityType: "income_record", entityId: recordId, after: { ...row, source_txn_id: sourceTxnId }, ip: req.ip ?? null });
+      return row;
     });
     res.status(201).json(result);
   }),
@@ -94,8 +96,11 @@ incomeRecordsRouter.patch(
   "/income-records/:id",
   requireUser(async (req, res, user) => {
     const result = await tx(async (c) => {
+      const before = (await incomeRows(c, user.id, undefined, pathId(req)))[0];
       const recordId = await saveIncome(c, user.id, req.body, pathId(req));
-      return (await incomeRows(c, user.id, undefined, recordId))[0];
+      const row = (await incomeRows(c, user.id, undefined, recordId))[0];
+      await audit(c, { userId: user.id, action: "income_record.update", entityType: "income_record", entityId: recordId, before, after: row, ip: req.ip ?? null });
+      return row;
     });
     res.json(result);
   }),
@@ -129,8 +134,11 @@ incomeRecordsRouter.post(
     res.json(
       await tx(async (c) => {
         await lockIncome(c, user.id);
-        await matchIncome(c, user.id, pathId(req), id(req.body, "txn_id"));
-        return (await incomeRows(c, user.id, undefined, pathId(req)))[0];
+        const txnId = id(req.body, "txn_id");
+        await matchIncome(c, user.id, pathId(req), txnId);
+        const row = (await incomeRows(c, user.id, undefined, pathId(req)))[0];
+        await audit(c, { userId: user.id, action: "income_record.match", entityType: "income_record", entityId: pathId(req), after: { ...row, txn_id: txnId }, ip: req.ip ?? null });
+        return row;
       }),
     );
   }),
@@ -150,7 +158,9 @@ incomeRecordsRouter.post(
           "update income_record set auto_match=false,updated_at=now() where id=$1",
           [income.id],
         );
-        return (await incomeRows(c, user.id, undefined, income.id))[0];
+        const row = (await incomeRows(c, user.id, undefined, income.id))[0];
+        await audit(c, { userId: user.id, action: "income_record.unmatch", entityType: "income_record", entityId: income.id, after: row, ip: req.ip ?? null });
+        return row;
       }),
     );
   }),

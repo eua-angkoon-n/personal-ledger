@@ -42,8 +42,17 @@ VPS Contabo, Docker Compose ต่อโปรเจกต์, Caddy รัน�
 
 ## อัปเดต
 
+**ก่อน** push งานที่จะขึ้น production: ขยับ `APP_VERSION` ใน `src/version.ts` และเพิ่มหัวข้อ
+ใหม่ใน `CHANGELOG.md` (minor = ฟีเจอร์ใหม่, patch = แก้บั๊ก) — กฎเต็มอยู่ที่ `AGENTS.md` §Versioning
+
 ```sh
 git pull && docker compose up -d --build
+```
+
+เสร็จแล้วเปิดเว็บดูเลขมุมล่างขวาว่าตรงกับที่ปล่อยไป ถ้าไม่ตรงคือ build ไม่ได้ขึ้นจริง
+
+```sh
+curl -s https://ledger.tapestopnight.com/api/me | grep -o '"version":"[^"]*"'
 ```
 
 ## ข้อควรระวัง

@@ -15,7 +15,36 @@ import {
   Typography,
   type ButtonProps,
 } from '@mui/material';
-import { descriptionSx } from './theme.js';
+import { GuideButton } from './guide/GuideButton.js';
+import { dataTextSx, descriptionSx } from './theme.js';
+
+/**
+ * เลขเวอร์ชันมุมล่างขวา แสดงทุกหน้ารวมหน้าเข้าสู่ระบบ ค่ามาจาก `GET /api/me`
+ * ใช้ฟอนต์ data ตาม Financial Clarity Rule (เลขเวอร์ชันคือข้อมูลเทคนิค ไม่ใช่ข้อความอธิบาย)
+ * `pointerEvents: none` เพื่อไม่บังปุ่มใด ๆ และ z-index อยู่ต่ำกว่า dialog/snackbar ของ MUI
+ */
+export function VersionBadge({ version }: { version: string | null }) {
+  if (!version) return null;
+  return (
+    <Box
+      aria-label={`เวอร์ชันระบบ ${version}`}
+      sx={{
+        position: 'fixed',
+        right: { xs: 8, sm: 12 },
+        bottom: { xs: 6, sm: 10 },
+        px: 0.75,
+        color: 'text.secondary',
+        fontSize: '0.875rem', // ขั้น `label` ของ DESIGN.md — ไม่ลด opacity ทับ เพราะ muted ต้องคง contrast AA
+        pointerEvents: 'none',
+        userSelect: 'none',
+        zIndex: (theme) => theme.zIndex.fab,
+        ...dataTextSx,
+      }}
+    >
+      v{version}
+    </Box>
+  );
+}
 
 type HeaderProps = {
   title: string;
@@ -33,9 +62,14 @@ export function PageHeader({ title, description, action, level = 2, id }: Header
       sx={{ alignItems: { xs: 'stretch', sm: 'flex-start' }, justifyContent: 'space-between' }}
     >
       <Box sx={{ minWidth: 0 }}>
-        <Typography component={level === 1 ? 'h1' : 'h2'} variant={level === 1 ? 'h1' : 'h2'} id={id}>
-          {title}
-        </Typography>
+        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+          <Typography component={level === 1 ? 'h1' : 'h2'} variant={level === 1 ? 'h1' : 'h2'} id={id}>
+            {title}
+          </Typography>
+          {/* ปุ่มคู่มือขึ้นเฉพาะหัวข้อระดับหน้า — หัวข้อย่อยในหน้า (level 2) ไม่ต้องมี
+              และ `action` ของ PageHeader ถูกใช้ไปแล้วเกือบทุกหน้า จึงห้ามยัดปุ่มนี้ลงไปที่นั้น */}
+          {level === 1 && <GuideButton />}
+        </Stack>
         {description && (
           <Typography color="text.secondary" sx={{ mt: 0.5, maxWidth: '70ch', ...descriptionSx }}>
             {description}
