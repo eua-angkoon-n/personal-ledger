@@ -12,12 +12,6 @@ declare module 'express-session' {
     userId?: number;
     oauthState?: string;
     addMailbox?: boolean;
-    pendingSignup?: {
-      googleSub: string;
-      email: string;
-      displayName: string;
-      refreshTokenEnc?: string;
-    };
   }
 }
 
@@ -84,7 +78,7 @@ function tooManyAttempts(ip: string): boolean {
 type AuthDependencies = {
   query: typeof query;
   encrypt: typeof encrypt;
-  env: Pick<typeof env, 'googleClientId' | 'googleClientSecret' | 'baseUrl' | 'inviteCode' | 'adminEmail'>;
+  env: Pick<typeof env, 'googleClientId' | 'googleClientSecret' | 'baseUrl' | 'adminEmail'>;
   fetch: typeof fetch;
 };
 
@@ -106,7 +100,6 @@ export function createAuthRouter({
 authRouter.get('/google', (req, res) => {
   if (tooManyAttempts(req.ip ?? 'unknown')) return void res.status(429).send('ลองใหม่อีก 15 นาที');
   req.session.oauthState = randomBytes(16).toString('hex');
-  req.session.pendingSignup = undefined;
   // ?add=1 = ผู้ใช้ที่ล็อกอินอยู่แล้วต่อกล่องอีเมลใบที่ 2 (requirement 1.1) ไม่ใช่การสมัครใหม่
   req.session.addMailbox = req.query.add === '1';
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -145,14 +138,22 @@ authRouter.get('/google/callback', async (req, res, next) => {
         grant_type: 'authorization_code',
       }),
     });
-    if (!tokenRes.ok) return void res.status(502).send('แลก token กับ Google ไม่สำเร็จ');
+    // ต้อง log body ของ Google ด้วย — ข้อความ 502 ที่ผู้ใช้เห็นไม่บอกว่า invalid_client,
+    // redirect_uri_mismatch หรือ code หมดอายุ ซึ่งเป็นสามอย่างที่ต้องรู้เพื่อแก้ (body ไม่มี secret)
+    if (!tokenRes.ok) {
+      console.error('token exchange ล้มเหลว', tokenRes.status, await tokenRes.text());
+      return void res.status(502).send('แลก token กับ Google ไม่สำเร็จ');
+    }
     const token = (await tokenRes.json()) as { access_token: string; refresh_token?: string };
 
     // ถาม userinfo แทนการถอด id_token เอง — ไม่ต้องตรวจลายเซ็น JWT เองให้พลาด
     const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { authorization: `Bearer ${token.access_token}` },
     });
-    if (!infoRes.ok) return void res.status(502).send('อ่านข้อมูลผู้ใช้จาก Google ไม่สำเร็จ');
+    if (!infoRes.ok) {
+      console.error('userinfo ล้มเหลว', infoRes.status, await infoRes.text());
+      return void res.status(502).send('อ่านข้อมูลผู้ใช้จาก Google ไม่สำเร็จ');
+    }
     const info = (await infoRes.json()) as { sub: string; email: string; name?: string };
 
     // ต่อกล่องเพิ่ม: ผูกเข้ากับผู้ใช้ใน session ไม่ใช่หา app_user จาก google_sub
@@ -165,56 +166,24 @@ authRouter.get('/google/callback', async (req, res, next) => {
       : await query<{ id: number }>('select id from app_user where google_sub = $1', [info.sub]);
     let userId = addMailbox ? req.session.userId : existing.rows[0]?.id;
 
+    // ผู้ใช้ใหม่สร้างทันทีที่นี่ ไม่มีขั้นกรอกรหัสเชิญคั่น — ด่านจริงคือ requireUser ที่ปล่อยเฉพาะ
+    // approved: ADMIN_EMAIL ได้ approved อัตโนมัติ คนอื่นเป็น pending จนแอดมินกดอนุมัติ
     if (!userId) {
-      req.session.userId = undefined;
-      req.session.pendingSignup = {
-        googleSub: info.sub,
-        email: info.email,
-        displayName: info.name ?? '',
-        refreshTokenEnc: token.refresh_token ? encrypt(token.refresh_token) : undefined,
-      };
-      return void res.redirect('/');
+      const isAdmin = info.email.toLowerCase() === env.adminEmail;
+      const created = await query<{ id: number }>(
+        `insert into app_user (google_sub, email, display_name, is_admin, status)
+         values ($1, $2, $3, $4, $5) returning id`,
+        [info.sub, info.email, info.name ?? '', isAdmin, isAdmin ? 'approved' : 'pending'],
+      );
+      userId = created.rows[0]!.id;
     }
 
-    req.session.pendingSignup = undefined;
     if (token.refresh_token) {
       await saveEmailAccount(userId, info.email, encrypt(token.refresh_token));
     }
 
     req.session.userId = userId;
     res.redirect('/');
-  } catch (e) {
-    next(e);
-  }
-});
-
-authRouter.post('/signup', async (req, res, next) => {
-  try {
-    if (tooManyAttempts(req.ip ?? 'unknown')) return void res.status(429).json({ error: 'ลองใหม่อีก 15 นาที' });
-    const pending = req.session.pendingSignup;
-    if (!pending) return void res.status(409).json({ error: 'ไม่มีการสมัครสมาชิกที่รอดำเนินการ' });
-    const inviteCode = (req.body as { inviteCode?: unknown }).inviteCode;
-    if (inviteCode !== env.inviteCode) return void res.status(403).json({ error: 'รหัสเชิญไม่ถูกต้อง' });
-
-    const existing = await query<{ id: number }>('select id from app_user where google_sub = $1', [pending.googleSub]);
-    let userId = existing.rows[0]?.id;
-    if (!userId) {
-      const isAdmin = pending.email.toLowerCase() === env.adminEmail;
-      const created = await query<{ id: number }>(
-        `insert into app_user (google_sub, email, display_name, is_admin, status)
-         values ($1, $2, $3, $4, $5) returning id`,
-        [pending.googleSub, pending.email, pending.displayName, isAdmin, isAdmin ? 'approved' : 'pending'],
-      );
-      userId = created.rows[0]!.id;
-    }
-
-    if (pending.refreshTokenEnc) {
-      await saveEmailAccount(userId, pending.email, pending.refreshTokenEnc);
-    }
-
-    req.session.pendingSignup = undefined;
-    req.session.userId = userId;
-    res.json({ ok: true });
   } catch (e) {
     next(e);
   }

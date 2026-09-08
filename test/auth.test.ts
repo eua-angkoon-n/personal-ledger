@@ -13,13 +13,12 @@ const authEnv = {
   googleClientId: 'client-id',
   googleClientSecret: 'client-secret',
   baseUrl: 'http://localhost',
-  inviteCode: 'family-only',
   adminEmail: 'admin@example.com',
 };
 
 type QueryCall = { sql: string; params: unknown[] };
 
-async function openTestApp(existingUserId?: number) {
+async function openTestApp(existingUserId?: number, googleEmail = 'member@example.com') {
   const calls: QueryCall[] = [];
   const fakeQuery = async (sql: string, params: unknown[] = []) => {
     calls.push({ sql, params });
@@ -35,7 +34,7 @@ async function openTestApp(existingUserId?: number) {
       return Response.json({ access_token: 'access-token', refresh_token: 'refresh-token' });
     }
     if (url === 'https://www.googleapis.com/oauth2/v3/userinfo') {
-      return Response.json({ sub: 'google-user-1', email: 'member@example.com', name: 'Family Member' });
+      return Response.json({ sub: 'google-user-1', email: googleEmail, name: 'Family Member' });
     }
     throw new Error(`unexpected fetch: ${url}`);
   };
@@ -82,12 +81,12 @@ async function completeGoogleLogin(request: (path: string, init?: RequestInit) =
   return request(`/auth/google/callback?code=oauth-code&state=${state}`);
 }
 
-test('new Google user is asked for the invite code only after OAuth', async (t) => {
+test('ผู้ใช้ Google ใหม่ถูกสร้างทันทีตอน callback และได้สถานะ pending', async (t) => {
   const app = await openTestApp();
   t.after(app.close);
 
   const initialMe = await app.request('/api/me');
-  assert.deepEqual(await initialMe.json(), { user: null, signupInviteRequired: false });
+  assert.deepEqual(await initialMe.json(), { user: null });
 
   // ไม่ล็อกอิน + endpoint ที่ย้ายไป src/routes/admin.ts ต้องยัง mount อยู่จริง (401 ไม่ใช่ 404 จาก fallback)
   const parserKeys = await app.request('/api/admin/parser-keys');
@@ -96,39 +95,49 @@ test('new Google user is asked for the invite code only after OAuth', async (t) 
   const callback = await completeGoogleLogin(app.request);
   assert.equal(callback.status, 302);
   assert.equal(callback.headers.get('location'), '/');
-  assert.equal(app.calls.some(({ sql }) => sql.includes('insert into app_user')), false);
 
-  const me = await app.request('/api/me');
-  assert.deepEqual(await me.json(), { user: null, signupInviteRequired: true });
+  const insert = app.calls.find(({ sql }) => sql.includes('insert into app_user'));
+  assert.ok(insert, 'ต้องสร้าง app_user ตอน callback ไม่มีขั้นกรอกรหัสเชิญคั่นอีกแล้ว');
+  // member@example.com ไม่ใช่ adminEmail — ด่านที่กันคนนอกคือสถานะนี้ ไม่ใช่รหัสเชิญ
+  assert.equal(insert.params[3], false, 'ต้องไม่ได้ is_admin');
+  assert.equal(insert.params[4], 'pending', 'ต้องเป็น pending รอแอดมินอนุมัติ');
 
-  const rejected = await app.request('/auth/signup', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inviteCode: 'wrong' }),
-  });
-  assert.equal(rejected.status, 403);
-
-  const accepted = await app.request('/auth/signup', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inviteCode: 'family-only' }),
-  });
-  assert.equal(accepted.status, 200);
-  assert.equal(app.calls.some(({ sql }) => sql.includes('insert into app_user')), true);
+  // refresh token ต้องถูกเก็บให้ผู้ใช้ใหม่ด้วย ไม่งั้น Gmail polling ไม่ทำงานเลยแบบไม่มี error
+  const mailbox = app.calls.find(({ sql }) => sql.includes('insert into email_account'));
+  assert.ok(mailbox, 'ต้องผูกกล่องอีเมลให้ผู้ใช้ใหม่');
+  assert.equal(mailbox.params[2], 'encrypted:refresh-token');
 });
 
-test('existing member signs in without an invite-code step', async (t) => {
+test('ADMIN_EMAIL ได้ is_admin + approved อัตโนมัติตอนล็อกอินครั้งแรก', async (t) => {
+  const app = await openTestApp(undefined, 'Admin@Example.com');
+  t.after(app.close);
+
+  const callback = await completeGoogleLogin(app.request);
+  assert.equal(callback.status, 302);
+
+  const insert = app.calls.find(({ sql }) => sql.includes('insert into app_user'));
+  assert.ok(insert);
+  assert.equal(insert.params[3], true, 'ต้องได้ is_admin (เทียบอีเมลแบบไม่สนตัวพิมพ์)');
+  assert.equal(insert.params[4], 'approved');
+});
+
+test('สมาชิกเดิมล็อกอินซ้ำต้องไม่สร้างผู้ใช้ใหม่', async (t) => {
   const app = await openTestApp(7);
   t.after(app.close);
 
   const callback = await completeGoogleLogin(app.request);
   assert.equal(callback.status, 302);
+  assert.equal(app.calls.some(({ sql }) => sql.includes('insert into app_user')), false);
+});
+
+test('ไม่มี endpoint สมัครสมาชิกด้วยรหัสเชิญเหลืออยู่', async (t) => {
+  const app = await openTestApp();
+  t.after(app.close);
 
   const signup = await app.request('/auth/signup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ inviteCode: 'family-only' }),
   });
-  assert.equal(signup.status, 409);
-  assert.equal(app.calls.some(({ sql }) => sql.includes('insert into app_user')), false);
+  assert.equal(signup.status, 404);
 });

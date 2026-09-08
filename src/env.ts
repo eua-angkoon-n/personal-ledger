@@ -12,7 +12,6 @@ export const env = {
   get googleClientId() { return required('GOOGLE_CLIENT_ID'); },
   get googleClientSecret() { return required('GOOGLE_CLIENT_SECRET'); },
   get baseUrl() { return required('BASE_URL').replace(/\/$/, ''); },
-  get inviteCode() { return required('SIGNUP_INVITE_CODE'); },
   get adminEmail() { return required('ADMIN_EMAIL').toLowerCase(); },
   get pdfStorageDir() { return process.env.PDF_STORAGE_DIR ?? './data/pdf'; },
   get taxDocStorageDir() { return process.env.TAX_DOC_STORAGE_DIR ?? './data/tax-docs'; },

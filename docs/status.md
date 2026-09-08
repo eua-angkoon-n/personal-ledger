@@ -13,7 +13,8 @@
 ## Slice 1 — โครงระบบ: เสร็จ
 
 - PostgreSQL + migration runner
-- Google OAuth, invite code, session, สิทธิ์ user/admin
+- Google OAuth, session, สิทธิ์ user/admin — รับสมาชิกด้วยการอนุมัติของแอดมินเท่านั้น ไม่มีรหัสเชิญ
+  (ถอดออก 2026-09-08 เพราะซ้อนกับ approval flow ที่ `requireUser` บังคับอยู่แล้ว)
 - เข้ารหัส refresh token และรหัสผ่าน PDF ด้วย AES-256-GCM
 - Docker image มี qpdf + pdftotext, app publish เฉพาะ `127.0.0.1:3001`
 - หน้า admin CRUD ธนาคาร/ผู้ใช้ และหน้า user CRUD บัญชีธนาคาร
