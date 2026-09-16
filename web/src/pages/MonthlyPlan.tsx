@@ -594,8 +594,13 @@ export default function MonthlyPlan() {
                               {/* ยอดประมาณการไม่มีสถานะ partial แล้ว สถานะจึงไม่บอกว่ายอดจริงต่าง
                                   จากที่เดาไว้เท่าไร ต้องโชว์ตรงนี้ — คิดสดจาก paid − planned ไม่มี
                                   field ใหม่จาก API ไม่ใส่สี เพราะสูง/ต่ำกว่าประมาณไม่ใช่ดี/ร้าย
-                                  (เหตุผลเดียวกับ comment ใน PaymentStatusChip.tsx) */}
+                                  (เหตุผลเดียวกับ comment ใน PaymentStatusChip.tsx)
+
+                                  ข้าม item ที่ผูก income_record: `planned_amount_satang` ของมันคือ
+                                  ยอดเต็ม แต่ payment คือยอดสุทธิ ส่วนต่างจึงเป็นรายการหัก ไม่ใช่
+                                  การประมาณคลาด — ยอดเต็ม/หัก/สุทธิ ดูได้ในตาราง "รายได้และรายการหัก" */}
                               {item.amount_mode === 'estimated' &&
+                                item.income_record_id == null &&
                                 item.paid_satang > 0 &&
                                 item.paid_satang !== item.planned_amount_satang && (
                                   <Typography variant="caption" color="text.secondary">
@@ -619,12 +624,20 @@ export default function MonthlyPlan() {
                                   เดิมปุ่มนี้กดบนรายการรายได้ได้ แล้วประกาศจ่ายยอดสุทธิที่เข้าบัญชีจริง
                                   (26,125) ไปเทียบกับยอดเต็มตามแผน (27,000) → ค้าง "จ่ายบางส่วน"
                                   รายการหักจากเงินเดือนไม่มีปุ่มอะไรเลย เงินไม่ได้ออกจากบัญชีเรา
-                                  มันขึ้น "หักจากรายได้" เองเมื่อถูกผูกจากฟอร์มรายได้ */}
-                              {item.kind === 'income' && item.income_record_id == null ? (
+                                  มันขึ้น "หักจากรายได้" เองเมื่อถูกผูกจากฟอร์มรายได้
+
+                                  เงื่อนไข `paid_satang === 0`: แถวที่ยังมีประกาศจ่ายค้างอยู่ต้องเหลือ
+                                  ปุ่ม "จ่ายแล้ว" ไว้ เพราะปุ่มยกเลิกการประกาศจ่ายอยู่ใน modal นั้น
+                                  ที่เดียว ถ้าสลับเป็น anchor ทั้งหมด จะยกเลิกของเก่าไม่ได้ และ
+                                  dropdown ในฟอร์มรายได้ซ่อนรายการที่ยังมี payment อยู่ = ตัน
+                                  ยกเลิกแล้ว paid_satang กลับเป็น 0 ปุ่มจะสลับเป็น anchor ให้เอง */}
+                              {item.kind === 'income' && item.income_record_id == null && item.paid_satang === 0 ? (
                                 <Button size="small" startIcon={<PaidRounded />} href="#income-heading" disabled={closed || inactive}>
                                   บันทึกรายได้เต็ม
                                 </Button>
-                              ) : item.kind === 'payroll_deduction' && item.income_record_id == null ? null : (
+                              ) : item.kind === 'payroll_deduction' &&
+                                item.income_record_id == null &&
+                                item.paid_satang === 0 ? null : (
                                 <Button
                                   size="small"
                                   startIcon={<PaidRounded />}
