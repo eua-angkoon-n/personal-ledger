@@ -33,9 +33,18 @@ export const ITEM_PAID_SQL = `
  * `due_date < current_date` ให้ NULL ไม่ใช่ false เพราะฉะนั้นต้องเช็ค `is not null` ก่อน ไม่งั้น
  * CASE จะตกทั้งสาขาแล้วคืน NULL ออกไปเป็นสถานะ
  *
- * สาขา verified ต้องมี `matched_satang > 0` ด้วย ไม่ใช่แค่ `>= planned`: รายการยอดประมาณการ 0 บาท
- * (`amount_mode='estimated'` ที่ยังไม่รู้ยอด) จะเข้าเงื่อนไข `0 >= 0` แล้วขึ้นว่า "ยืนยันจาก statement แล้ว"
- * ทั้งที่ไม่มี txn ผูกอยู่เลย ขัด §16 ข้อ 6
+ * สาขา verified ของยอดคงที่ต้องมี `matched_satang > 0` ด้วย ไม่ใช่แค่ `>= planned`: รายการยอด 0 บาท
+ * ที่ไม่ได้ตั้งเป็นยอดประมาณการ จะเข้าเงื่อนไข `0 >= 0` แล้วขึ้นว่า "ยืนยันจาก statement แล้ว" ทั้งที่
+ * ไม่มี txn ผูกอยู่เลย ขัด §16 ข้อ 6 (ยอดประมาณการออกทางสาขาของตัวเองก่อนถึงบรรทัดนั้นไปแล้ว)
+ *
+ * ยอดประมาณการ (`amount_mode` ที่ copy ลง item ตอนกาง — migration 011) **ไม่มีสถานะ partial**:
+ * ยอดตามแผนเป็นการเดา บิลจริงสูงหรือต่ำกว่าก็ได้ ถ้าเทียบ `paid < planned` ตามปกติ เดือนที่บิลมาน้อย
+ * กว่าที่เดาไว้จะค้าง "จ่ายบางส่วน" ตลอดโดยผู้ใช้แก้ให้หายไม่ได้ ทั้งที่บิลปิดและจับคู่ statement แล้ว
+ * ส่วนต่างไปแสดงบนหน้าจอโดยคิดสดจาก `paid_satang − planned_amount_satang` ไม่เก็บซ้ำ (§7.2)
+ *
+ * เงื่อนไข verified ของยอดประมาณการคือ `matched = paid` ไม่ใช่ `matched > 0` — ประกาศจ่ายหลายแถวแล้ว
+ * จับคู่ได้บางแถวต้องยังเป็น "จ่ายแล้ว รอ statement" ตาม §16 ข้อ 6 (เทียบเท่า `matched >= planned`
+ * ของยอดคงที่) `matched` เป็น subset ของ `paid` จึงเทียบเท่า `>=` และ `paid > 0` การันตีมาจากสาขาก่อนแล้ว
  */
 export const PAYMENT_STATE_SQL = `
   case
@@ -47,6 +56,8 @@ export const PAYMENT_STATE_SQL = `
       (select r.expected_net_satang from income_record r where r.id=i.income_record_id) then 'verified'
     when pay.paid_satang = 0 and i.due_date is not null and i.due_date < current_date then 'overdue'
     when pay.paid_satang = 0 then 'unpaid'
+    when i.amount_mode = 'estimated' and pay.matched_satang = pay.paid_satang then 'verified'
+    when i.amount_mode = 'estimated' then 'declared'
     when pay.paid_satang < i.planned_amount_satang then 'partial'
     when pay.matched_satang > 0 and pay.matched_satang >= i.planned_amount_satang then 'verified'
     else 'declared'

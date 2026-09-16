@@ -103,6 +103,7 @@ type ActiveRule = RecurrenceSpec & {
   id: number;
   kind: string;
   name: string;
+  amount_mode: 'fixed' | 'estimated';
   amount_satang: number;
   category_id: number | null;
 };
@@ -141,7 +142,7 @@ export async function generateMonthlyItems(
 
   // start_date/end_date กลับมาเป็น string 'YYYY-MM-DD' ตาม type parser ใน src/db.ts
   const { rows } = await db.query<ActiveRule>(
-    `select id, kind, name, amount_satang, category_id,
+    `select id, kind, name, amount_mode, amount_satang, category_id,
             frequency_unit, frequency_interval, anchor_day, start_date, end_date
      from recurring_rule
      where user_id = $1
@@ -163,13 +164,14 @@ export async function generateMonthlyItems(
   for (const r of rows) {
     if (materialized.has(r.id)) continue;
     for (const dueDate of occurrencesInMonth(r, monthStart)) {
+      // copy `amount_mode` ลงแถวด้วย — สถานะการจ่ายอ่านจาก snapshot ของกฎ ไม่ join สดกลับไป (migration 011)
       const res = await db.query(
         `insert into monthly_plan_item
            (monthly_plan_id, recurring_rule_id, kind, name, category_id, planned_amount_satang,
-            occurrence_date, due_date)
-         values ($1, $2, $3, $4, $5, $6, $7, $7)
+            amount_mode, occurrence_date, due_date)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $8)
          on conflict do nothing`,
-        [planId, r.id, r.kind, r.name, r.category_id, r.amount_satang, dueDate],
+        [planId, r.id, r.kind, r.name, r.category_id, r.amount_satang, r.amount_mode, dueDate],
       );
       inserted += res.rowCount ?? 0;
     }

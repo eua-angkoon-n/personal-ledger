@@ -329,13 +329,20 @@ export default function MonthlyPlan() {
 
   // เติมค่าเริ่มต้นให้ครบที่สุดที่รู้: ยอดคงเหลือที่ยังไม่จ่าย, วันครบกำหนด และ "บัญชีที่คาดว่าจะใช้"
   // ของรายการประจำต้นทาง (§9.2) — ถ้าไม่อ่านค่านั้นที่นี่ ช่องนั้นในฟอร์มกฎก็ไม่มีใครใช้เลย
+  //
+  // ยกเว้นยอด: รายการยอดประมาณการปล่อยช่องว่างให้พิมพ์ยอดจากบิลจริง — reconcile เทียบยอดเป๊ะถึงสตางค์
+  // (`t.amount_satang = p.amount_satang`) เติมยอดที่เดาไว้ให้แล้วผู้ใช้กดผ่าน = ประกาศจ่าย 4,000
+  // ที่ไม่มี txn ไหนตรง ค้างรอ statement ถาวร ขณะที่เงินออกจริง 3,800 ลอยไม่ถูกจับคู่
   const openPayment = (item: PlanItem) => {
     const remaining = Math.max(0, item.planned_amount_satang - item.paid_satang);
     const rule = item.recurring_rule_id == null ? undefined : rules.find((r) => r.id === item.recurring_rule_id);
     const defaultAccountId = rule?.default_account_id ?? accounts[0]?.id ?? null;
     setPayingItem(item);
     setPaymentForm({
-      amount_baht: ((remaining > 0 ? remaining : item.planned_amount_satang) / 100).toFixed(2),
+      amount_baht:
+        item.amount_mode === 'estimated'
+          ? ''
+          : ((remaining > 0 ? remaining : item.planned_amount_satang) / 100).toFixed(2),
       paid_date: item.due_date ?? `${month}-01`,
       bank_account_id: defaultAccountId == null ? '' : String(defaultAccountId),
     });
@@ -584,6 +591,20 @@ export default function MonthlyPlan() {
                           <TableCell>
                             <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                               <PaymentStatusChip state={item.payment_state} />
+                              {/* ยอดประมาณการไม่มีสถานะ partial แล้ว สถานะจึงไม่บอกว่ายอดจริงต่าง
+                                  จากที่เดาไว้เท่าไร ต้องโชว์ตรงนี้ — คิดสดจาก paid − planned ไม่มี
+                                  field ใหม่จาก API ไม่ใส่สี เพราะสูง/ต่ำกว่าประมาณไม่ใช่ดี/ร้าย
+                                  (เหตุผลเดียวกับ comment ใน PaymentStatusChip.tsx) */}
+                              {item.amount_mode === 'estimated' &&
+                                item.paid_satang > 0 &&
+                                item.paid_satang !== item.planned_amount_satang && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    {item.paid_satang < item.planned_amount_satang
+                                      ? 'ต่ำกว่าประมาณ '
+                                      : 'สูงกว่าประมาณ '}
+                                    <Money satang={item.paid_satang - item.planned_amount_satang} />
+                                  </Typography>
+                                )}
                               {review && item.income_record_id == null && (
                                 <Button size="small" color="inherit" onClick={() => openReview(item, review)}>
                                   เลือกคู่

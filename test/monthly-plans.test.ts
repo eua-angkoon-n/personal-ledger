@@ -13,6 +13,7 @@ type Item = {
   name: string;
   kind: string;
   planned_amount_satang: number;
+  amount_mode: string;
   due_date: string | null;
   explicit_status: string;
   payment_state: string;
@@ -37,7 +38,7 @@ type PlanResponse = {
     planned_reserve_satang: number;
     planned_available_satang: number;
   };
-  payment_status: { total_count: number; unpaid_count: number; overdue_count: number; verified_count: number };
+  payment_status: { total_count: number; unpaid_count: number; overdue_count: number; verified_count: number; partial_count: number };
   items: Item[];
 };
 
@@ -160,6 +161,7 @@ test('monthly planning API', async (t) => {
   const MONTH_RECONCILE = shiftMonth(4);
   const MONTH_TOTALS = shiftMonth(5);
   const MONTH_CLOSING = shiftMonth(6);
+  const MONTH_ESTIMATED = shiftMonth(7);
 
   await t.test('รายการประจำ: กางให้เอง idempotent และการแก้กฎไม่ย้อนแก้เดือนที่ generate แล้ว', async () => {
     const created = await send('/api/recurring-rules', 'POST', {
@@ -330,6 +332,8 @@ test('monthly planning API', async (t) => {
       })
     ).json()) as { id: number }).id;
     // ยังไม่จ่ายและไม่มี due_date → unpaid ไม่ใช่ verified จาก 0 >= 0
+    // (รายการเฉพาะเดือนเป็น amount_mode='fixed' จึงยังทดสอบ guard `matched_satang > 0` ตามเดิม
+    //  ยอดประมาณการจากกฎมี test แยกที่ท้ายไฟล์)
     assert.equal(itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าน้ำมัน (ยังไม่รู้ยอด)').payment_state, 'unpaid');
     await send(`/api/monthly-plan-items/${zeroItemId}/payments`, 'POST', {
       amount_satang: 30_000,
@@ -827,6 +831,58 @@ test('monthly planning API', async (t) => {
     assert.equal((await send('/api/installment-plans','POST',{...base,default_account_id:accountId})).status,400);
     assert.equal((await send('/api/income-records','POST',body)).status,400);
     await send('/test/login','POST',{userId});
+  });
+
+  await t.test('ยอดประมาณการ: จ่ายแล้วคือจบ ไม่มี partial และดูส่วนต่างจากที่ประมาณไว้ได้', async () => {
+    // ผูก end_date ให้คลุมเดือนเดียว — generateMonthlyItems ยิงทุกครั้งที่ GET เดือนไหนก็ตาม
+    // ถ้าไม่ผูกจะไปโผล่ในเดือนที่ test อื่น assert ยอดรวมไว้เป๊ะ (เหตุผลเดียวกับกฎของ MONTH_CLOSING)
+    await send('/api/recurring-rules', 'POST', {
+      name: 'ค่าน้ำ ค่าไฟ',
+      kind: 'expense',
+      amount_mode: 'estimated',
+      amount_satang: 400_000,
+      frequency_unit: 'month',
+      anchor_day: 10,
+      start_date: `${MONTH_ESTIMATED}-01`,
+      end_date: `${MONTH_ESTIMATED}-28`,
+    });
+
+    // amount_mode ต้องถูก copy ลง item ตอนกาง ไม่ใช่ join สดกลับไปที่กฎ (migration 011)
+    const item = itemNamed(await getPlan(MONTH_ESTIMATED), 'ค่าน้ำ ค่าไฟ');
+    assert.equal(item.amount_mode, 'estimated');
+    assert.equal(item.payment_state, 'unpaid'); // ยังไม่จ่าย = ยังไม่จ่าย ไม่ใช่ declared ฟรี ๆ
+
+    // บิลจริง 3,800 ต่ำกว่าที่ประมาณไว้ 4,000 → "จ่ายแล้ว รอ statement" ไม่ใช่ "จ่ายบางส่วน"
+    const payDate = `${MONTH_ESTIMATED}-10`;
+    const declared = await send(`/api/monthly-plan-items/${item.id}/payments`, 'POST', {
+      amount_satang: 380_000, paid_date: payDate, bank_account_id: accountId,
+    });
+    assert.equal(declared.status, 201);
+    const paymentId = ((await declared.json()) as { id: number }).id;
+    const under = await getPlan(MONTH_ESTIMATED);
+    assert.equal(itemNamed(under, 'ค่าน้ำ ค่าไฟ').payment_state, 'declared');
+    // ส่วนต่างที่หน้าจอคิดเอง (ไม่มี field ใหม่จาก API) และการ์ดสรุปต้องไม่นับเป็น partial
+    assert.equal(itemNamed(under, 'ค่าน้ำ ค่าไฟ').paid_satang - 400_000, -20_000);
+    assert.equal(under.payment_status.partial_count, 0);
+
+    // จับคู่ statement ครบ → verified ทั้งที่ยอดไม่ถึงที่ประมาณไว้ (ยอดคงที่จะยังเป็น partial)
+    // ยืนยันคู่เอง ไม่ปล่อย auto: POST /payments เรียก reconcilePayments ในตัว ถ้า seed txn ไว้ก่อน
+    // จะกระโดดไป verified ทันทีแล้วไม่ได้ทดสอบเคส declared เลย
+    const txnId = await seedTxn({ date: payDate, amount: 380_000, direction: 'debit' });
+    assert.equal((await send(`/api/monthly-item-payments/${paymentId}`, 'PATCH', { txn_id: txnId })).status, 200);
+    assert.equal(itemNamed(await getPlan(MONTH_ESTIMATED), 'ค่าน้ำ ค่าไฟ').payment_state, 'verified');
+
+    // จ่ายเพิ่ม 500 (รวม 4,300 สูงกว่าที่ประมาณไว้) แถวใหม่ยังไม่มีคู่ → กลับเป็นรอ statement
+    // ตาม §16 ข้อ 6 — เงื่อนไข verified คือ matched = paid ไม่ใช่ matched > 0
+    assert.equal(
+      (await send(`/api/monthly-plan-items/${item.id}/payments`, 'POST', {
+        amount_satang: 50_000, paid_date: `${MONTH_ESTIMATED}-11`, bank_account_id: accountId,
+      })).status,
+      201,
+    );
+    const over = itemNamed(await getPlan(MONTH_ESTIMATED), 'ค่าน้ำ ค่าไฟ');
+    assert.equal(over.payment_state, 'declared');
+    assert.equal(over.paid_satang - over.planned_amount_satang, 30_000);
   });
 
 });
