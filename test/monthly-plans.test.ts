@@ -94,8 +94,8 @@ test('monthly planning API', async (t) => {
     if (setCookie) cookie = setCookie.split(';', 1)[0]!;
     return res;
   };
-  const send = (path: string, method: 'POST' | 'PATCH', body: unknown) =>
-    request(path, { method, body: JSON.stringify(body) });
+  const send = (path: string, method: 'POST' | 'PATCH' | 'DELETE', body: unknown) =>
+    request(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
   const getPlan = async (month: string): Promise<PlanResponse> => {
     const res = await request(`/api/monthly-plans/${month}`);
     assert.equal(res.status, 200);
@@ -212,9 +212,23 @@ test('monthly planning API', async (t) => {
     assert.equal(past.generated_item_count, 0);
     assert.equal(past.items.length, 0);
 
+    // แก้ anchor_day แล้วเปิดเดือนที่กางไปแล้วซ้ำ **ต้องไม่ได้แถวที่สอง** — occurrence_date เป็นส่วนหนึ่ง
+    // ของคีย์กันซ้ำ ถ้าไม่ข้ามกฎที่กางแล้วทั้งกฎ จะได้ทั้งวันเดิมและวันใหม่ค้างอยู่ในเดือนเดียวกัน
+    assert.equal((await send(`/api/recurring-rules/${ruleId}`, 'PATCH', { anchor_day: 23 })).status, 200);
+    const afterAnchor = await getPlan(MONTH_RULES);
+    assert.equal(afterAnchor.generated_item_count, 0);
+    assert.equal(afterAnchor.items.filter((i) => i.recurring_rule_id === ruleId).length, 1);
+
+    // ลบรายการของกฎออกจากเดือนนั้นจนหมด → GET รอบถัดไปกางใหม่ตามกฎปัจจุบัน (anchor 23)
+    const stale = afterAnchor.items.find((i) => i.recurring_rule_id === ruleId)!;
+    assert.equal((await send(`/api/monthly-plan-items/${stale.id}`, 'DELETE', undefined)).status, 204);
+    const regenerated = await getPlan(MONTH_RULES);
+    assert.equal(regenerated.generated_item_count, 1);
+    assert.equal(itemNamed(regenerated, 'ค่าเช่าบ้าน').due_date, `${MONTH_RULES}-23`);
+
     // archive แล้วเดือนใหม่ไม่ generate อีก แต่ของเดิมยังอยู่เป็นประวัติ
     assert.equal((await send(`/api/recurring-rules/${ruleId}/archive`, 'POST', {})).status, 200);
-    assert.equal(itemNamed(await getPlan(MONTH_RULES), 'ค่าเช่าบ้าน').planned_amount_satang, 1_500_000);
+    assert.equal(itemNamed(await getPlan(MONTH_RULES), 'ค่าเช่าบ้าน').planned_amount_satang, 1_800_000);
   });
 
   await t.test('รายการเฉพาะเดือน: เพิ่ม copy จากเดือนก่อน (ซ้ำไม่ได้) และ skip โดยไม่ลบประวัติ', async () => {
@@ -636,12 +650,21 @@ test('monthly planning API', async (t) => {
     assert.equal((await send(`/api/monthly-plan-items/${itemId}`, 'PATCH', { name: 'ค่าประกันชีวิต' })).status, 200);
     assert.equal((await send(`/api/monthly-plans/${MONTH_CLOSING}/reopen`, 'POST', {})).status, 404);
 
-    // เปิดเดือนแล้ว gate ปลดจริง: วันที่ 20 ตามกฎที่แก้ไว้เพิ่งเกิดตอนนี้ (พิสูจน์ว่าที่ปิดไว้คือสถานะเดือน
-    // ไม่ใช่เพราะไม่มีกฎเหลือ) และของเดิมวันที่ 05 ยังอยู่ ไม่ถูกเขียนทับ
+    // เปิดเดือนแล้วก็ยังไม่กางซ้ำ — กฎกางลงเดือนนี้ไปแล้ว การแก้กฎไม่ย้อนมาเพิ่มแถวที่สอง
     const afterReopen = await getPlan(MONTH_CLOSING);
-    assert.equal(afterReopen.generated_item_count, 1);
-    const generated = afterReopen.items.filter((i) => i.recurring_rule_id === closingRuleId);
-    assert.deepEqual(generated.map((i) => i.due_date).sort(), [`${MONTH_CLOSING}-05`, `${MONTH_CLOSING}-20`]);
+    assert.equal(afterReopen.generated_item_count, 0);
+    const fromRule = afterReopen.items.filter((i) => i.recurring_rule_id === closingRuleId);
+    assert.deepEqual(fromRule.map((i) => i.due_date), [`${MONTH_CLOSING}-05`]);
+
+    // มีประกาศจ่ายที่ยังไม่ยกเลิกห้ามลบ (payment ผูก on delete cascade) ให้ใช้ skip แทน
+    assert.equal((await send(`/api/monthly-plan-items/${itemId}`, 'DELETE', undefined)).status, 409);
+
+    // ลบรายการของกฎทิ้งแล้ว GET ใหม่กางกลับมาตามกฎที่แก้ไว้ (วันที่ 20) — พิสูจน์ว่าที่ไม่กางตอนเดือนปิด
+    // คือ gate ของสถานะเดือน ไม่ใช่เพราะไม่มีกฎเหลือ
+    assert.equal((await send(`/api/monthly-plan-items/${fromRule[0]!.id}`, 'DELETE', undefined)).status, 204);
+    const regenerated = await getPlan(MONTH_CLOSING);
+    assert.equal(regenerated.generated_item_count, 1);
+    assert.equal(itemNamed(regenerated, 'ค่าส่วนกลาง').due_date, `${MONTH_CLOSING}-20`);
   });
 
   await t.test('input ที่ใช้ไม่ได้ต้องเป็น 4xx ไม่ใช่ 500', async () => {

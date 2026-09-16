@@ -31,6 +31,7 @@ import PaidRounded from '@mui/icons-material/PaidRounded';
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import SkipNextRounded from '@mui/icons-material/SkipNextRounded';
 import {
+  del,
   patch,
   post,
   req,
@@ -639,6 +640,20 @@ export default function MonthlyPlan() {
                                   ข้าม
                                 </Button>
                               )}
+                              <Button
+                                size="small"
+                                color="error"
+                                startIcon={<DeleteOutlineRounded />}
+                                disabled={closed || item.income_record_id != null || item.installment_due_id != null}
+                                onClick={() =>
+                                  void run(
+                                    () => del(`/api/monthly-plan-items/${item.id}`),
+                                    'ลบรายการแล้ว',
+                                  )
+                                }
+                              >
+                                ลบ
+                              </Button>
                               {item.income_record_id != null && <Typography variant="body2" color="text.secondary">จัดการในรายได้ด้านบน</Typography>}
                               {item.installment_due_id != null && <Button component={Link} to="/installments">ดูแผนผ่อน</Button>}
                             </Stack>

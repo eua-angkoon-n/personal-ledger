@@ -68,8 +68,9 @@ recurringRulesRouter.post('/recurring-rules', requireUser(async (req, res, user)
   res.status(201).json(rows[0]);
 }));
 
-// การแก้กฎมีผลเฉพาะรายการในอนาคต (§9.2) — ไม่ต้องทำอะไรเพิ่มที่นี่ เพราะ generateMonthlyItems เป็น
-// insert-only รายการของเดือนที่ generate ไปแล้วจึงไม่ถูกแตะ ทั้งเดือนที่เปิดและปิด (§16 ข้อ 16)
+// การแก้กฎมีผลเฉพาะรายการในอนาคต (§9.2) — ไม่ต้องทำอะไรเพิ่มที่นี่ เพราะ generateMonthlyItems ข้ามกฎ
+// ที่กางลงเดือนนั้นไปแล้วทั้งกฎ รายการของเดือนที่ generate ไปแล้วจึงไม่ถูกแตะ ทั้งเดือนที่เปิดและปิด (§16 ข้อ 16)
+// แค่ insert-only ไม่พอ: คีย์กันซ้ำมี occurrence_date อยู่ด้วย แก้ anchor_day จึงเคยได้แถวที่สองของกฎเดิม
 //
 // anchor_day / end_date / default_account_id / category_id เป็น nullable จึงใช้ท่า hasOwnProperty +
 // `case when $k then $v else col end` แบบ routes/accounts.ts แยกจาก coalesce ไม่งั้นตั้งกลับเป็น null ไม่ได้

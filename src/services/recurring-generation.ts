@@ -114,9 +114,14 @@ type ActiveRule = RecurrenceSpec & {
  * และห้ามเปลี่ยนเป็น upsert เด็ดขาด: การแก้ยอด/ชื่อของ rule ต้องมีผลกับเดือนที่ยัง generate ไม่ถึงเท่านั้น
  * ไม่ย้อนแก้เดือนที่ผู้ใช้ตรวจหรือปิดไปแล้ว (§9.2, §16 ข้อ 16)
  *
- * **ไม่ generate ย้อนเดือนที่ผ่านไปแล้ว**: insert-only กันการ *แก้* แถวเดิมได้ แต่ไม่กันการ *เพิ่ม*
- * แถวใหม่ — แก้ `anchor_day` 5 → 20 แล้วเปิดดูเดือนที่แล้วที่ยัง open จะได้ทั้งวันที่ 5 และ 20
- * ยอดตามแผนของเดือนที่ผ่านไปแล้วเปลี่ยน ขัด §9.2 "การแก้ Recurring Rule มีผลเฉพาะรายการในอนาคต"
+ * **ข้ามกฎที่กางลงเดือนนี้ไปแล้ว**: insert-only กันการ *แก้* แถวเดิมได้ แต่ไม่กันการ *เพิ่ม* แถวใหม่
+ * — คีย์กันซ้ำมี `occurrence_date` อยู่ด้วย แก้ `anchor_day` 1 → 23 แล้วเปิดเดือนเดิมซ้ำจึงได้ทั้ง
+ * วันที่ 1 และ 23 เป็นแถวซ้ำที่ผู้ใช้ลบเองไม่ได้ (เจอจริงกับกฎ "ค่าน้ำ ค่าไฟ" 2026-09 ถึง 2026-12)
+ * เดือนไหนมีแถวของกฎข้อนั้นอยู่แล้ว = generate ไปแล้ว ข้ามทั้งกฎ ตรงตาม §9.2 "การแก้ Recurring Rule
+ * มีผลเฉพาะรายการในอนาคต" ผลที่ตามมา: แก้กฎแล้วอยากให้เดือนที่เปิดดูไปแล้วเปลี่ยนตาม ต้องลบรายการ
+ * ของกฎนั้นในเดือนนั้นทิ้ง (DELETE /monthly-plan-items/:id) แล้ว GET ใหม่จะกางตามกฎปัจจุบันให้
+ *
+ * **ไม่ generate ย้อนเดือนที่ผ่านไปแล้ว**: เดือนที่ผ่านไปแล้วออกตั้งแต่บรรทัดแรก
  * ผลที่ยอมรับ: สร้างกฎวันนี้แล้วเปิดดูเดือนก่อน ๆ จะไม่มีรายการย้อนหลังให้ ซึ่งตรงตามสเปก
  *
  * เขียน `occurrence_date` (คีย์กันซ้ำที่ผู้ใช้แก้ไม่ได้) พร้อม `due_date` ที่ผู้ใช้เลื่อนได้ทีหลัง
@@ -147,8 +152,16 @@ export async function generateMonthlyItems(
     [userId, monthEnd, monthStart],
   );
 
+  const { rows: done } = await db.query<{ recurring_rule_id: number }>(
+    `select distinct recurring_rule_id from monthly_plan_item
+     where monthly_plan_id = $1 and recurring_rule_id is not null`,
+    [planId],
+  );
+  const materialized = new Set(done.map((d) => d.recurring_rule_id));
+
   let inserted = 0;
   for (const r of rows) {
+    if (materialized.has(r.id)) continue;
     for (const dueDate of occurrencesInMonth(r, monthStart)) {
       const res = await db.query(
         `insert into monthly_plan_item
