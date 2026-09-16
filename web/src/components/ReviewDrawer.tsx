@@ -223,23 +223,14 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
                 </TextField>
                 <TextField label="โน้ต (ไม่บังคับ)" value={note} onChange={(e) => setNote(e.target.value)} size="small" multiline minRows={2} slotProps={{ htmlInput: { maxLength: 500 } }} />
                 {classification === 'income' && detail.direction === 'credit' && (
-                  detail.income_record_id != null ? (
-                    <Alert
-                      severity="success"
-                      action={<Button size="small" onClick={() => setIncomeModalOpen(true)}>แก้ไขยอด</Button>}
-                    >
-                      บันทึกเป็นรายได้เต็มไปแล้ว — นับอยู่ใน "เงินได้จากงานประจำ" ของหน้าภาษี
-                      กด "แก้ไขยอด" ถ้ากรอกยอดก่อนหักผิด
-                    </Alert>
-                  ) : (
-                    <Alert
-                      severity="info"
-                      action={<Button size="small" onClick={() => setIncomeModalOpen(true)}>บันทึกเป็นรายได้เต็ม</Button>}
-                    >
-                      ถ้านี่คือเงินเดือนหรือรายได้ประจำ กดปุ่มนี้เพื่อบันทึกเป็น "รายได้เต็ม" ได้เลย —
-                      จะขึ้นเป็น "เงินได้จากงานประจำ" ในหน้าภาษี ส่วน Tax Treatment ด้านล่างมีไว้สำหรับรายได้ธุรกิจอื่นเท่านั้น
-                    </Alert>
-                  )
+                  <Alert
+                    severity="info"
+                    action={<Button size="small" onClick={() => setIncomeModalOpen(true)}>บันทึกเป็นรายได้เต็ม</Button>}
+                  >
+                    ถ้านี่คือเงินเดือนหรือรายได้ประจำ กดปุ่มนี้เพื่อบันทึกเป็น "รายได้เต็ม" ได้เลย —
+                    จะขึ้นเป็น "เงินได้จากงานประจำ" ในหน้าภาษี ส่วน Tax Treatment ด้านล่างมีไว้สำหรับรายได้ธุรกิจอื่นเท่านั้น
+                    {' '}รายได้ไม่ผูกกับธุรกรรมแล้ว กดซ้ำจะได้รายการซ้ำ
+                  </Alert>
                 )}
                 <TextField
                   select
@@ -411,15 +402,14 @@ export default function ReviewDrawer({ txnId, categories, taxEntities, onClose, 
           ก่อนหน้าเมื่อสลับแถว เพราะ useState ตั้งค่าเริ่มต้นแค่ตอน mount ครั้งแรกเท่านั้น */}
       {detail && incomeModalOpen && (
         <IncomeQuickAddModal
-          key={`${detail.id}-${detail.income_record_id ?? 'new'}`}
+          key={detail.id}
           txn={detail}
-          incomeRecordId={detail.income_record_id ?? undefined}
           month={detail.txn_date.slice(0, 7)}
           open
           onClose={() => setIncomeModalOpen(false)}
           onSaved={() => {
             onNotice({ message: 'บันทึกรายได้เต็มแล้ว — ดูยอดได้ที่หน้าภาษี', severity: 'success' });
-            void load(detail.id); // ให้ income_record_id อัปเดต ปุ่มจะได้เปลี่ยนเป็น "บันทึกไปแล้ว" ทันที
+            void load(detail.id);
             onSaved();
           }}
         />

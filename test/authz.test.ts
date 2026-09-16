@@ -546,43 +546,14 @@ test('cross-user authorization: Slice 4A endpoints', async (t) => {
     assert.equal(leaked.rows[0]!.n, 1); // มีแต่ paymentB ที่ seed ไว้
   });
 
-  await t.test('21. PATCH /api/monthly-item-payments/:id — ของ B แตะไม่ได้ และผูก txn ของ B ไม่ได้', async () => {
+  await t.test('21. PATCH /api/monthly-item-payments/:id — ยกเลิกการจ่ายของ B ไม่ได้', async () => {
     await loginAs(userA);
     assert.equal((await request(`/api/monthly-item-payments/${paymentB}`, json({ status: 'cancelled' }))).status, 404);
-    assert.equal((await request(`/api/monthly-item-payments/${paymentB}`, json({ txn_id: txnB }))).status, 404);
-
-    const ownItem = (await request(
-      `/api/monthly-plans/${PLAN_MONTH}/items`,
-      post({ kind: 'expense', name: 'ค่าน้ำของ A', planned_amount_satang: 20000 }),
-    ).then((r) => r.json())) as { id: number };
-    const ownPayment = (await request(
-      `/api/monthly-plan-items/${ownItem.id}/payments`,
-      post({ amount_satang: 20000, paid_date: `${PLAN_MONTH}-07`, bank_account_id: accountA }),
-    ).then((r) => r.json())) as { id: number };
-    // txn ของ B ยอดเท่ากันพอดี (20000) — ต้องถูกปฏิเสธเพราะเป็นของคนอื่นและอยู่คนละบัญชี
-    assert.equal((await request(`/api/monthly-item-payments/${ownPayment.id}`, json({ txn_id: txnB }))).status, 400);
-    const stillUnmatched = await db.pool.query<{ status: string; txn_id: number | null }>(
-      'select status, txn_id from monthly_item_payment where id = $1',
-      [ownPayment.id],
-    );
-    assert.equal(stillUnmatched.rows[0]!.txn_id, null);
-  });
-
-  await t.test('22. reconcilePayments ของ A ไม่แตะ payment ของ B ที่ยอด/วันตรงกับ txn ของ B', async () => {
-    const { reconcilePayments } = await import('../src/services/payment-reconciliation.js');
-    const { pool } = await import('../src/db.js');
-    // txnB เป็น debit 20000 วันที่ 2026-08-15 — ปรับ payment ของ B ให้ตรงเป๊ะ เพื่อให้จับคู่ได้ถ้า scope รั่ว
-    await db.pool.query(
-      `update monthly_item_payment set amount_satang = 20000, paid_date = '2026-08-15' where id = $1`,
+    const untouched = await db.pool.query<{ status: string }>(
+      'select status from monthly_item_payment where id = $1',
       [paymentB],
     );
-    await reconcilePayments(pool, userA);
-    const b = await db.pool.query<{ status: string; txn_id: number | null }>(
-      'select status, txn_id from monthly_item_payment where id = $1',
-      [paymentB],
-    );
-    assert.equal(b.rows[0]!.status, 'declared');
-    assert.equal(b.rows[0]!.txn_id, null);
+    assert.equal(untouched.rows[0]!.status, 'declared');
   });
 
   await t.test('23. close/reopen มีผลเฉพาะแผนของผู้ login', async () => {

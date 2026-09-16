@@ -8,7 +8,6 @@ import {
   materializeDue,
   saveInstallment,
 } from "../services/installments.js";
-import { reconcilePayments } from "../services/payment-reconciliation.js";
 import { audit } from "../services/audit.js";
 export const installmentsRouter = Router();
 installmentsRouter.get(
@@ -28,7 +27,6 @@ installmentsRouter.get(
     const totals = {
       total_payable_satang: 0,
       paid_satang: 0,
-      matched_satang: 0,
       outstanding_satang: 0,
     };
     for (const row of rows)
@@ -85,11 +83,6 @@ installmentsRouter.post(
       await audit(c, { userId: user.id, action: "monthly_item_payment.declare", entityType: "monthly_item_payment", entityId: row.id, after: row, ip: req.ip ?? null });
       return row;
     });
-    try {
-      await reconcilePayments(pool, user.id);
-    } catch (e) {
-      console.error("[installments] reconciliation failed", e);
-    }
     res
       .status(201)
       .json(

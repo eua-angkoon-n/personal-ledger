@@ -4,7 +4,6 @@ import { requireUser } from '../auth.js';
 import { pool, query, tx } from '../db.js';
 import { enumStr, HttpError, id, isoDate, pathId, satang, str, optionalStr, type Body } from '../http.js';
 import { generateMonthlyItems } from '../services/recurring-generation.js';
-import { reconcilePayments } from '../services/payment-reconciliation.js';
 import { declarePayment, generateInstallmentItems } from '../services/installments.js';
 import { audit } from '../services/audit.js';
 import {
@@ -69,7 +68,7 @@ const ITEMS_SQL = `
   select i.id, i.recurring_rule_id, i.installment_due_id, i.income_record_id, i.kind, i.name,
          i.category_id, c.name as category_name,
          i.planned_amount_satang, i.amount_mode, i.due_date, i.explicit_status, i.note,
-         pay.paid_satang, pay.matched_satang, pay.needs_review_count,
+         pay.paid_satang,
          ${PAYMENT_STATE_SQL} as payment_state,
          coalesce(pmts.payments, '[]'::json) as payments
   from monthly_plan_item i
@@ -82,9 +81,7 @@ const ITEMS_SQL = `
              'paid_date', p2.paid_date,
              'bank_account_id', p2.bank_account_id,
              'account_nickname', a2.nickname,
-             'txn_id', p2.txn_id,
-             'status', p2.status,
-             'verified_at', p2.verified_at
+             'status', p2.status
            ) order by p2.paid_date, p2.id) as payments
     from monthly_item_payment p2
     join bank_account a2 on a2.id = p2.bank_account_id and a2.user_id = $2
@@ -344,42 +341,26 @@ monthlyPlansRouter.post('/monthly-plan-items/:id/payments', requireUser(async (r
     return row;
   });
 
-  try {
-    await reconcilePayments(pool, user.id);
-  } catch (e) {
-    console.error(`[planning] reconcilePayments user=${user.id} ล้มเหลว:`, e);
-  }
-
   const { rows } = await query('select * from monthly_item_payment where id = $1', [inserted.id]);
   res.status(201).json(rows[0]);
 }));
 
 /**
- * ปิดวง `needs_review` (§9.5 — auto-match ทำได้เฉพาะเมื่อมี candidate เดียว)
+ * ยกเลิกการบันทึกการจ่าย — เปลี่ยนยอดจ่ายของเดือน จึงต้องเปิดเดือนก่อน
  *
- * ส่ง `txn_id` = ยืนยันคู่ด้วยมือ อนุญาตแม้เดือนปิดแล้ว เพราะเป็นการ reconcile ให้เสร็จ ไม่ได้เปลี่ยน
- * ตัวเลขตามแผน ส่ง `status: 'cancelled'` = ยกเลิกการประกาศจ่าย ซึ่งเปลี่ยนยอดจ่าย จึงต้องเปิดเดือนก่อน
+ * เดิม endpoint นี้ทำสองอย่าง: ยกเลิก กับ "ยืนยันคู่ statement ด้วยมือ" (ส่ง `txn_id` มา)
+ * ส่วนหลังถูกถอดออกพร้อมกับ reconciliation ทั้งระบบ — แผนไม่ผูกกับ statement อีกแล้ว
  */
 monthlyPlansRouter.patch('/monthly-item-payments/:id', requireUser(async (req, res, user) => {
   const paymentId = pathId(req);
   const b = req.body as Body;
-  const cancelling = b.status != null;
-  if (cancelling && enumStr(b, 'status', ['cancelled'] as const) !== 'cancelled') {
+  if (enumStr(b, 'status', ['cancelled'] as const) !== 'cancelled') {
     throw new HttpError(400, 'status ตั้งได้เฉพาะ cancelled');
   }
-  const txnId = b.txn_id == null || b.txn_id === '' ? null : id(b, 'txn_id');
-  if (cancelling === (txnId != null)) throw new HttpError(400, 'ต้องส่ง txn_id หรือ status อย่างใดอย่างหนึ่ง');
 
   const updated = await tx(async (c) => {
-    const owned = await c.query<{
-      monthly_plan_item_id: number;
-      bank_account_id: number;
-      status: string;
-      amount_satang: number;
-      kind: string;
-      income_record_id: number | null;
-    }>(
-      `select p.monthly_plan_item_id, p.bank_account_id, p.status, p.amount_satang, i.kind, i.income_record_id
+    const owned = await c.query<{ id: number; monthly_plan_item_id: number; status: string }>(
+      `select p.id, p.monthly_plan_item_id, p.status
        from monthly_item_payment p
        join monthly_plan_item i on i.id = p.monthly_plan_item_id
        join monthly_plan mp on mp.id = i.monthly_plan_id
@@ -389,54 +370,13 @@ monthlyPlansRouter.patch('/monthly-item-payments/:id', requireUser(async (req, r
     );
     const payment = owned.rows[0];
     if (!payment) throw new HttpError(404, 'ไม่พบรายการจ่าย');
-    if (payment.income_record_id != null) throw new HttpError(409, 'จัดการคู่เงินเข้าผ่านรายได้');
-    if (!cancelling && payment.status === 'cancelled') throw new HttpError(409, 'รายการจ่ายถูกยกเลิกแล้ว');
-
-    if (cancelling) {
-      await loadOwnedItem(c, user.id, payment.monthly_plan_item_id, { requireOpen: true });
-      const { rows } = await c.query(
-        `update monthly_item_payment set status = 'cancelled', txn_id = null, verified_at = null
-         where id = $1 returning *`,
-        [paymentId],
-      );
-      const after = rows[0];
-      await audit(c, { userId: user.id, action: 'monthly_item_payment.cancel', entityType: 'monthly_item_payment', entityId: paymentId, before: payment, after, ip: req.ip ?? null });
-      return after;
-    }
-
-    if (payment.status === 'matched') throw new HttpError(409, 'รายการจ่ายนี้จับคู่ไว้แล้ว');
-
-    // ต้องตรวจเกณฑ์ §9.5 ข้อ 1–3 ให้ครบเหมือน auto-match ไม่ใช่แค่ "เป็นบัญชีของ user"
-    // ยอดใน matched_satang นับจากยอดของ payment ไม่ใช่ของ txn — ถ้าไม่บังคับให้ยอดตรงกัน
-    // ผู้ใช้ผูก payment 100,000 บาทกับ txn 10 บาทได้ แล้วรายการจะขึ้นว่า "ยืนยันจาก statement แล้ว"
-    // ไม่บังคับกรอบ ±3 วัน (เกณฑ์ข้อ 4) เพราะขั้นตอนนี้คือให้คนตัดสินสิ่งที่ระบบตัดสินไม่ได้
-    // — วันที่คลาดกันได้จริงเวลาธนาคารลงรายการช้า แต่ยอดกับทิศทางเป็นข้อเท็จจริงที่ต่อรองไม่ได้
-    const txn = await c.query(
-      `select 1 from txn t
-       join bank_account a on a.id = t.bank_account_id and a.user_id = $2
-       where t.id = $1
-         and t.bank_account_id = $3
-         and t.amount_satang = $4
-         and t.direction = $5`,
-      [
-        txnId,
-        user.id,
-        payment.bank_account_id,
-        payment.amount_satang,
-        payment.kind === 'income' ? 'credit' : 'debit',
-      ],
-    );
-    if (!txn.rowCount) {
-      throw new HttpError(400, 'ธุรกรรมนี้ไม่ใช่ของคุณ อยู่คนละบัญชี ยอดไม่ตรง หรือทิศทางเงินไม่ตรงกับรายการ');
-    }
-
+    await loadOwnedItem(c, user.id, payment.monthly_plan_item_id, { requireOpen: true });
     const { rows } = await c.query(
-      `update monthly_item_payment set status = 'matched', txn_id = $2, verified_at = now()
-       where id = $1 returning *`,
-      [paymentId, txnId],
+      `update monthly_item_payment set status = 'cancelled' where id = $1 returning *`,
+      [paymentId],
     );
     const after = rows[0];
-    await audit(c, { userId: user.id, action: 'monthly_item_payment.confirm', entityType: 'monthly_item_payment', entityId: paymentId, before: payment, after, ip: req.ip ?? null });
+    await audit(c, { userId: user.id, action: 'monthly_item_payment.cancel', entityType: 'monthly_item_payment', entityId: paymentId, before: payment, after, ip: req.ip ?? null });
     return after;
   });
   res.json(updated);

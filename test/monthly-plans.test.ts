@@ -18,10 +18,8 @@ type Item = {
   explicit_status: string;
   payment_state: string;
   paid_satang: number;
-  matched_satang: number;
-  needs_review_count: number;
   recurring_rule_id: number | null;
-  payments: { id: number; status: string; txn_id: number | null; verified_at: string | null }[];
+  payments: { id: number; status: string }[];
 };
 
 type PlanResponse = {
@@ -38,7 +36,7 @@ type PlanResponse = {
     planned_reserve_satang: number;
     planned_available_satang: number;
   };
-  payment_status: { total_count: number; unpaid_count: number; overdue_count: number; verified_count: number; partial_count: number };
+  payment_status: { total_count: number; unpaid_count: number; overdue_count: number; paid_count: number; partial_count: number };
   items: Item[];
 };
 
@@ -58,7 +56,6 @@ test('monthly planning API', async (t) => {
   await db.migrate();
 
   const { api, HttpError } = await import('../src/api.js');
-  const { reconcilePayments } = await import('../src/services/payment-reconciliation.js');
   const { pool } = await import('../src/db.js');
 
   const app = express();
@@ -296,7 +293,7 @@ test('monthly planning API', async (t) => {
     });
     assert.equal(paid.status, 201);
     assert.equal(await txnCount(), before);
-    assert.equal(((await paid.json()) as { status: string; txn_id: number | null }).status, 'declared');
+    assert.equal(((await paid.json()) as { status: string }).status, 'declared');
 
     const partial = itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าไฟ');
     assert.equal(partial.payment_state, 'partial');
@@ -308,10 +305,9 @@ test('monthly planning API', async (t) => {
       bank_account_id: accountId,
     });
     const full = itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าไฟ');
-    // จ่ายครบแต่ยัง matched ไม่ครบ = "จ่ายแล้ว รอ statement" ไม่ใช่ verified (§16 ข้อ 6)
-    assert.equal(full.payment_state, 'declared');
+    // จ่ายครบตามแผนแล้ว = "จ่ายแล้ว" จบ ไม่มีขั้นรอยืนยันจาก statement อีก
+    assert.equal(full.payment_state, 'paid');
     assert.equal(full.paid_satang, 100_000);
-    assert.equal(full.matched_satang, 0);
     assert.equal(await txnCount(), before);
 
     // ยกเลิกการประกาศจ่ายแล้วยอดจ่ายต้องลดลง (cancelled ไม่นับเป็นยอดจ่าย)
@@ -322,7 +318,7 @@ test('monthly planning API', async (t) => {
     assert.equal(itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าไฟ').paid_satang, 60_000);
   });
 
-  await t.test('รายการยอดประมาณการ 0 บาทที่ประกาศจ่ายแล้วต้องไม่ขึ้นว่า verified', async () => {
+  await t.test('รายการยอด 0 บาทต้องไม่ขึ้นว่าจ่ายแล้วฟรี ๆ จาก 0 >= 0', async () => {
     await getPlan(MONTH_PAYMENTS);
     const zeroItemId = ((await (
       await send(`/api/monthly-plans/${MONTH_PAYMENTS}/items`, 'POST', {
@@ -331,17 +327,14 @@ test('monthly planning API', async (t) => {
         planned_amount_satang: 0,
       })
     ).json()) as { id: number }).id;
-    // ยังไม่จ่ายและไม่มี due_date → unpaid ไม่ใช่ verified จาก 0 >= 0
-    // (รายการเฉพาะเดือนเป็น amount_mode='fixed' จึงยังทดสอบ guard `matched_satang > 0` ตามเดิม
-    //  ยอดประมาณการจากกฎมี test แยกที่ท้ายไฟล์)
+    // ยังไม่จ่ายและไม่มี due_date → unpaid ไม่ใช่ paid จาก 0 >= 0 (สาขา paid_satang = 0 ต้องดักก่อน)
     assert.equal(itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าน้ำมัน (ยังไม่รู้ยอด)').payment_state, 'unpaid');
     await send(`/api/monthly-plan-items/${zeroItemId}/payments`, 'POST', {
       amount_satang: 30_000,
       paid_date: `${MONTH_PAYMENTS}-15`,
       bank_account_id: accountId,
     });
-    // ประกาศจ่ายแล้วแต่ยังไม่มี txn จับคู่ → declared (§16 ข้อ 6) ไม่ใช่ verified
-    assert.equal(itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าน้ำมัน (ยังไม่รู้ยอด)').payment_state, 'declared');
+    assert.equal(itemNamed(await getPlan(MONTH_PAYMENTS), 'ค่าน้ำมัน (ยังไม่รู้ยอด)').payment_state, 'paid');
   });
 
   await t.test('overdue อ่านจาก current_date และ due_date ที่เป็น null ต้องเป็น unpaid ไม่ใช่ NULL', async () => {
@@ -363,154 +356,7 @@ test('monthly planning API', async (t) => {
     assert.equal(itemNamed(withDates, 'ไม่มีกำหนด').payment_state, 'unpaid');
   });
 
-  await t.test('reconciliation: candidate เดียวจับให้ สองอันส่งให้ตรวจ และ txn เดิมจับซ้ำไม่ได้', async () => {
-    await getPlan(MONTH_RECONCILE);
-    const payDate = `${MONTH_RECONCILE}-15`;
-    await seedTxn({ date: payDate, amount: 77_000, direction: 'debit' });
-
-    const itemId = ((await (
-      await send(`/api/monthly-plans/${MONTH_RECONCILE}/items`, 'POST', {
-        kind: 'expense',
-        name: 'ค่าน้ำ',
-        planned_amount_satang: 77_000,
-        due_date: payDate,
-      })
-    ).json()) as { id: number }).id;
-
-    const paid = await send(`/api/monthly-plan-items/${itemId}/payments`, 'POST', {
-      amount_satang: 77_000,
-      paid_date: payDate,
-      bank_account_id: accountId,
-    });
-    const payment = (await paid.json()) as { status: string; txn_id: number | null; verified_at: string | null };
-    assert.equal(payment.status, 'matched');
-    assert.ok(payment.txn_id);
-    assert.ok(payment.verified_at);
-    const verified = itemNamed(await getPlan(MONTH_RECONCILE), 'ค่าน้ำ');
-    assert.equal(verified.payment_state, 'verified');
-    assert.equal(verified.matched_satang, 77_000);
-
-    // txn ตัวเดิมถูกจับไปแล้ว รายการอื่นที่ยอด/วันเหมือนกันต้องไม่ถูกจับคู่ซ้ำ (§16 ข้อ 7)
-    const secondItemId = ((await (
-      await send(`/api/monthly-plans/${MONTH_RECONCILE}/items`, 'POST', {
-        kind: 'expense',
-        name: 'ค่าน้ำอีกหลัง',
-        planned_amount_satang: 77_000,
-        due_date: payDate,
-      })
-    ).json()) as { id: number }).id;
-    const second = await send(`/api/monthly-plan-items/${secondItemId}/payments`, 'POST', {
-      amount_satang: 77_000,
-      paid_date: payDate,
-      bank_account_id: accountId,
-    });
-    assert.equal(((await second.json()) as { status: string }).status, 'declared');
-
-    // candidate สองตัว → needs_review ไม่เดา (§9.5 auto-match เฉพาะ candidate เดียว)
-    await seedTxn({ date: `${MONTH_RECONCILE}-18`, amount: 33_000, direction: 'debit' });
-    await seedTxn({ date: `${MONTH_RECONCILE}-19`, amount: 33_000, direction: 'debit' });
-    const ambiguousItemId = ((await (
-      await send(`/api/monthly-plans/${MONTH_RECONCILE}/items`, 'POST', {
-        kind: 'expense',
-        name: 'ค่าโทรศัพท์',
-        planned_amount_satang: 33_000,
-        due_date: `${MONTH_RECONCILE}-18`,
-      })
-    ).json()) as { id: number }).id;
-    const ambiguous = await send(`/api/monthly-plan-items/${ambiguousItemId}/payments`, 'POST', {
-      amount_satang: 33_000,
-      paid_date: `${MONTH_RECONCILE}-18`,
-      bank_account_id: accountId,
-    });
-    const needsReview = (await ambiguous.json()) as { id: number; status: string; txn_id: number | null };
-    assert.equal(needsReview.status, 'needs_review');
-    assert.equal(needsReview.txn_id, null);
-
-    // needs_review ต้องไม่ทำให้รายการเด้งกลับเป็น "ยังไม่จ่าย" — ผู้ใช้ประกาศจ่ายไปแล้ว
-    // ระบบแค่ยังไม่รู้ว่าคู่กับ txn ตัวไหน จึงยังเป็น declared และมีตัวนับให้ผู้ใช้ไปเลือกเอง
-    const pending = itemNamed(await getPlan(MONTH_RECONCILE), 'ค่าโทรศัพท์');
-    assert.equal(pending.payment_state, 'declared');
-    assert.equal(pending.paid_satang, 33_000);
-    assert.equal(pending.matched_satang, 0);
-    assert.equal(pending.needs_review_count, 1);
-
-    // ผู้ใช้เลือกเองผ่าน PATCH ปิดวง needs_review
-    const chosenTxnId = (
-      await db.pool.query<{ id: number }>(
-        `select id from txn where amount_satang = 33000 and bank_account_id = $1 order by id limit 1`,
-        [accountId],
-      )
-    ).rows[0]!.id;
-    const resolved = await send(`/api/monthly-item-payments/${needsReview.id}`, 'PATCH', { txn_id: chosenTxnId });
-    assert.equal(resolved.status, 200);
-    assert.equal(((await resolved.json()) as { status: string }).status, 'matched');
-    assert.equal(itemNamed(await getPlan(MONTH_RECONCILE), 'ค่าโทรศัพท์').payment_state, 'verified');
-
-    // ยืนยันด้วยมือต้องตรวจยอดและทิศทางเหมือน auto-match — ไม่งั้นผูก payment ก้อนใหญ่กับ txn
-    // ก้อนเล็กได้แล้วรายการจะขึ้นว่า "ยืนยันจาก statement แล้ว" (matched_satang นับยอดของ payment)
-    const wrongAmountTxnId = await seedTxn({ date: `${MONTH_RECONCILE}-18`, amount: 1_000, direction: 'debit' });
-    const creditTxnId = await seedTxn({ date: `${MONTH_RECONCILE}-18`, amount: 33_000, direction: 'credit' });
-    const stillDeclaredId = (
-      await db.pool.query<{ id: number }>(
-        `select id from monthly_item_payment where monthly_plan_item_id = $1 and status = 'declared' limit 1`,
-        [secondItemId],
-      )
-    ).rows[0]!.id;
-    assert.equal(
-      (await send(`/api/monthly-item-payments/${stillDeclaredId}`, 'PATCH', { txn_id: wrongAmountTxnId })).status,
-      400,
-    );
-    assert.equal(
-      (await send(`/api/monthly-item-payments/${stillDeclaredId}`, 'PATCH', { txn_id: creditTxnId })).status,
-      400,
-    );
-
-    // จับคู่ซ้ำกับ txn ที่ถูกจองแล้วต้องไม่ผ่าน (partial unique index เป็นคนบังคับ)
-    const dup = await db.pool
-      .query(`update monthly_item_payment set status = 'matched', txn_id = $1 where id = $2`, [
-        chosenTxnId,
-        (
-          await db.pool.query<{ id: number }>(
-            `select id from monthly_item_payment where monthly_plan_item_id = $1 and status = 'declared' limit 1`,
-            [secondItemId],
-          )
-        ).rows[0]!.id,
-      ])
-      .then(() => null)
-      .catch((e: { code?: string }) => e.code);
-    assert.equal(dup, '23505');
-  });
-
-  await t.test('reconcile ต้องไม่ดูด txn ไปจองให้รายการที่ skip ไปแล้ว', async () => {
-    await getPlan(MONTH_RECONCILE);
-    const skippedItemId = ((await (
-      await send(`/api/monthly-plans/${MONTH_RECONCILE}/items`, 'POST', {
-        kind: 'expense',
-        name: 'ยกเลิกไปแล้ว',
-        planned_amount_satang: 91_000,
-        due_date: `${MONTH_RECONCILE}-10`,
-      })
-    ).json()) as { id: number }).id;
-    await send(`/api/monthly-plan-items/${skippedItemId}/payments`, 'POST', {
-      amount_satang: 91_000,
-      paid_date: `${MONTH_RECONCILE}-10`,
-      bank_account_id: accountId,
-    });
-    await send(`/api/monthly-plan-items/${skippedItemId}/skip`, 'POST', {});
-
-    // txn จริงมาถึงทีหลัง — ต้องไปไม่ถึง payment ของรายการที่ skip แล้ว ไม่งั้น txn ถูกจอง
-    // แล้วรายการที่ถูกต้องจับคู่กับมันไม่ได้อีกเลย (partial unique index)
-    await seedTxn({ date: `${MONTH_RECONCILE}-10`, amount: 91_000, direction: 'debit' });
-    await reconcilePayments(pool, userId);
-    const stale = await db.pool.query<{ status: string; txn_id: number | null }>(
-      'select status, txn_id from monthly_item_payment where monthly_plan_item_id = $1',
-      [skippedItemId],
-    );
-    assert.equal(stale.rows[0]!.status, 'declared');
-    assert.equal(stale.rows[0]!.txn_id, null);
-  });
-
-  await t.test('Reserve ลดเงินเหลือใช้ตามแผนแต่ไม่เป็น Expense ทั้งก่อนและหลังจับคู่ txn จริง', async () => {
+  await t.test('Reserve ลดเงินเหลือใช้ตามแผนแต่ไม่เป็น Expense และ mark paid ไม่สร้าง txn', async () => {
     await getPlan(MONTH_TOTALS);
     const add = async (kind: string, name: string, amount: number) =>
       ((await (
@@ -538,7 +384,7 @@ test('monthly planning API', async (t) => {
     // การ์ด Payment Status นับเฉพาะ kind='expense' — income/deduction/reserve ไม่ใช่บิลที่ต้องไปจ่าย
     assert.equal((await getPlan(MONTH_TOTALS)).payment_status.total_count, 1);
 
-    // แม้ผู้ใช้จะ mark paid รายการ reserve แล้วจับคู่กับ txn จริงได้ ยอดรายจ่ายตามแผนก็ต้องไม่ขยับ
+    // แม้ผู้ใช้จะ mark paid รายการ reserve และมี txn จริงในเดือนนั้น ยอดรายจ่ายตามแผนก็ต้องไม่ขยับ
     const moneyOutBefore = (
       await db.pool.query<{ n: number }>(
         `select coalesce(sum(amount_satang), 0)::bigint as n from txn where direction = 'debit'`,
@@ -551,7 +397,7 @@ test('monthly planning API', async (t) => {
       paid_date: reserveDate,
       bank_account_id: accountId,
     });
-    assert.equal(((await reservePaid.json()) as { status: string }).status, 'matched');
+    assert.equal(((await reservePaid.json()) as { status: string }).status, 'declared');
 
     const afterTotals = (await getPlan(MONTH_TOTALS)).totals;
     assert.equal(afterTotals.planned_expense_satang, 800_000);
@@ -565,7 +411,7 @@ test('monthly planning API', async (t) => {
     assert.equal(moneyOutAfter, moneyOutBefore + 1_000_000);
   });
 
-  await t.test('ปิดเดือนล็อกการแก้ของผู้ใช้ แต่ reconcile ยังจับคู่เข้ามาได้และหน้าจออ่านสถานะสด', async () => {
+  await t.test('ปิดเดือนล็อกการแก้ของผู้ใช้ และหน้าจออ่านสถานะสด ไม่ใช่จาก closed_snapshot', async () => {
     // กฎที่ active คลุมเฉพาะเดือนนี้ — ต้องมีของจริงให้ generate ไม่งั้น assert generated_item_count === 0
     // ตอนเดือนปิดจะผ่านฟรีโดยไม่ได้พิสูจน์ §16 ข้อ 16 เลย
     const closingRuleId = ((await (
@@ -597,7 +443,7 @@ test('monthly planning API', async (t) => {
       bank_account_id: accountId,
     });
     const beforeClose = itemNamed(await getPlan(MONTH_CLOSING), 'ค่าประกัน');
-    assert.equal(beforeClose.payment_state, 'declared');
+    assert.equal(beforeClose.payment_state, 'paid');
 
     const closed = await send(`/api/monthly-plans/${MONTH_CLOSING}/close`, 'POST', {});
     assert.equal(closed.status, 200);
@@ -632,15 +478,11 @@ test('monthly planning API', async (t) => {
       409,
     );
 
-    // statement ที่มาช้าต้องจับคู่ payment ในเดือนที่ปิดแล้วได้ (ไม่เปลี่ยนตัวเลขตามแผน)
-    await seedTxn({ date: `${MONTH_CLOSING}-26`, amount: 250_000, direction: 'debit' });
-    assert.equal(await reconcilePayments(pool, userId), 1);
-
     const stillClosed = await getPlan(MONTH_CLOSING);
     assert.equal(stillClosed.status, 'closed');
-    // อ่านสถานะสด ไม่ใช่จาก closed_snapshot — ถ้าอ่านจาก snapshot การจับคู่นี้จะไม่ปรากฏบนจอเลย
-    assert.equal(itemNamed(stillClosed, 'ค่าประกัน').payment_state, 'verified');
-    assert.equal(stillClosed.payment_status.verified_count, 1);
+    // อ่านสถานะสด ไม่ใช่จาก closed_snapshot ที่แช่ไว้ตอนปิดเดือน
+    assert.equal(itemNamed(stillClosed, 'ค่าประกัน').payment_state, 'paid');
+    assert.equal(stillClosed.payment_status.paid_count, 1);
     // §16 ข้อ 16: แก้กฎหลังปิดเดือนแล้วห้ามย้อนมาเพิ่มรายการในเดือนที่ปิด
     assert.equal((await send(`/api/recurring-rules/${closingRuleId}`, 'PATCH', { anchor_day: 20 })).status, 200);
     const afterRuleChange = await getPlan(MONTH_CLOSING);
@@ -731,7 +573,7 @@ test('monthly planning API', async (t) => {
       400,
     );
   });
-  await t.test('Slice 6 income links existing rows, matches net, protects evidence and ownership', async () => {
+  await t.test('Slice 6 รายได้เต็ม: เชื่อมรายการในแผน แยก gross/หัก/สุทธิ และกันข้าม user', async () => {
     await send('/test/login','POST',{userId});
     const month=shiftMonth(8); await getPlan(month);
     const existing=await send(`/api/monthly-plans/${month}/items`,'POST',{kind:'income',name:'Salary',planned_amount_satang:10000});
@@ -739,32 +581,24 @@ test('monthly planning API', async (t) => {
     const deduction=await send(`/api/monthly-plans/${month}/items`,'POST',{kind:'payroll_deduction',name:'Tax',planned_amount_satang:1000});
     const deductionItem=(await deduction.json()) as {id:number};
     const before=await txnCount();
-    const create=await send('/api/income-records','POST',{month,name:'Salary',gross_amount_satang:10000,monthly_plan_item_id:item.id,bank_account_id:accountId,income_date:`${month}-25`,auto_match:true,deductions:[{deduction_type:'withholding_tax',name:'Tax',amount_satang:1000,monthly_plan_item_id:deductionItem.id}]});
+    const create=await send('/api/income-records','POST',{month,name:'Salary',gross_amount_satang:10000,monthly_plan_item_id:item.id,bank_account_id:accountId,income_date:`${month}-25`,deductions:[{deduction_type:'withholding_tax',name:'Tax',amount_satang:1000,monthly_plan_item_id:deductionItem.id}]});
     assert.equal(create.status,201,await create.clone().text());
-    const income=await create.json() as {id:number;expected_net_satang:number;match_status:string};
-    assert.equal(income.expected_net_satang,9000);assert.equal(income.match_status,'pending');
+    const income=await create.json() as {id:number;expected_net_satang:number};
+    assert.equal(income.expected_net_satang,9000);
+    // บันทึกรายได้ห้ามสร้าง txn ปลอม และห้ามกางรายการซ้ำ — เชื่อมกับแถวเดิมในแผน
     assert.equal(await txnCount(),before);
     const plan=await getPlan(month);assert.equal(plan.items.filter(i=>i.id===item.id).length,1);
+    // แถวที่ผูกกับรายได้แล้วต้องจัดการผ่านหน้ารายได้เท่านั้น
     assert.equal((await send(`/api/monthly-plan-items/${item.id}`,'PATCH',{planned_amount_satang:1})).status,409);
     assert.equal((await send(`/api/monthly-plan-items/${deductionItem.id}/skip`,'POST',{})).status,409);
-    assert.equal((await send(`/api/income-records/${income.id}`,'PATCH',{gross_amount_satang:500})).status,400);
-    await send(`/api/monthly-plans/${month}/close`,'POST',{});
-    const txnId=await seedTxn({date:`${month}-25`,amount:9000,direction:'credit'});
-    const {reconcileIncome}=await import('../src/services/income-records.js');const {tx}=await import('../src/db.js');
-    await tx(c=>reconcileIncome(c,userId));
-    const list=await (await request(`/api/income-records?month=${month}`)).json() as {rows:{id:number;deposit_txn_id:number;match_status:string}[]};
-    assert.equal(list.rows[0]!.deposit_txn_id,txnId);assert.equal(list.rows[0]!.match_status,'matched');
-    assert.equal(itemNamed(await getPlan(month),'Salary').payment_state,'verified');
-    assert.equal((await send(`/api/income-records/${income.id}/unmatch`,'POST',{})).status,409);
-    await send(`/api/monthly-plans/${month}/reopen`,'POST',{});
-    assert.equal((await send(`/api/income-records/${income.id}/unmatch`,'POST',{})).status,200);
-    await tx(c=>reconcileIncome(c,userId));
-    const unmatched=await (await request(`/api/income-records?month=${month}`)).json() as {rows:{auto_match:boolean;deposit_txn_id:null}[]};
-    assert.equal(unmatched.rows[0]!.auto_match,false);assert.equal(unmatched.rows[0]!.deposit_txn_id,null);
+    assert.equal(itemNamed(plan,'Salary').payment_state,'received');
+    assert.equal(plan.items.find(i=>i.id===deductionItem.id)!.payment_state,'deducted');
+    // ไม่มีคู่เงินเข้าให้รักษาแล้ว แก้ยอดเต็มย้อนหลังได้เลย ไม่ต้องยกเลิกอะไรก่อน
+    assert.equal((await send(`/api/income-records/${income.id}`,'PATCH',{gross_amount_satang:12000})).status,200);
+    assert.equal(itemNamed(await getPlan(month),'Salary').planned_amount_satang,12000);
     const outsider=(await db.pool.query(`insert into app_user(google_sub,email,display_name,is_admin,status) values('slice6-admin','slice6-admin@example.com','Admin',true,'approved') returning id`)).rows[0]!.id;
     await send('/test/login','POST',{userId:outsider});
     assert.equal((await send(`/api/income-records/${income.id}`,'PATCH',{name:'Stolen'})).status,404);
-    assert.equal((await request(`/api/income-records/${income.id}/candidates`)).status,404);
     await send('/test/login','POST',{userId});
   });
   await t.test('Slice 6 installment down payment, partial/concurrent/future payments, undo and skipped debt', async () => {
@@ -793,44 +627,23 @@ test('monthly planning API', async (t) => {
     assert.equal(report.totals.outstanding_satang,0);
   });
 
-  await t.test('Slice 6 zero net, duplicate links, ambiguous deposits and excluded transfers', async () => {
+  await t.test('Slice 6 ยอดสุทธิเป็นศูนย์ และรายการหักเชื่อมซ้ำไม่ได้', async () => {
     const month=shiftMonth(10);await getPlan(month);
-    const body={month,name:'Other income',gross_amount_satang:12345,bank_account_id:accountId,income_date:`${month}-15`,auto_match:true,deductions:[]};
+    const body={month,name:'Other income',gross_amount_satang:12345,bank_account_id:accountId,income_date:`${month}-15`,deductions:[]};
     const zeroRes=await send('/api/income-records','POST',{...body,gross_amount_satang:500,deductions:[{deduction_type:'social_security',name:'Contribution',amount_satang:500}]});
     assert.equal(zeroRes.status,201);
-    const zero=await zeroRes.json() as {id:number;match_status:string;monthly_plan_item_id:number;deductions:{monthly_plan_item_id:number}[]};
-    assert.equal(zero.match_status,'not_required');
+    const zero=await zeroRes.json() as {id:number;monthly_plan_item_id:number;deductions:{monthly_plan_item_id:number}[]};
+    // หักหมดจนสุทธิเป็นศูนย์ = ไม่มีเงินเข้าบัญชีให้รอ ต่างจาก 'received' ที่ยังมีเงินเข้าจริง
     assert.equal((await getPlan(month)).items.find(i=>i.id===zero.monthly_plan_item_id)!.payment_state,'not_required');
     const duplicate={deduction_type:'other',name:'Duplicate',amount_satang:1,monthly_plan_item_id:zero.deductions[0]!.monthly_plan_item_id};
     assert.equal((await send(`/api/income-records/${zero.id}`,'PATCH',{deductions:[duplicate,duplicate]})).status,400);
+    // รายได้ไม่ผูกกับ statement แล้ว บันทึกซ้ำจากเงินเข้าก้อนเดิมได้ และนับเป็นสองก้อนจริง ๆ
+    await seedTxn({date:`${month}-15`,amount:12345,direction:'credit'});
     const a=await (await send('/api/income-records','POST',body)).json() as {id:number};
     const b=await (await send('/api/income-records','POST',body)).json() as {id:number};
-    const transaction=await seedTxn({date:`${month}-15`,amount:12345,direction:'credit'});
-    const {reconcileIncome}=await import('../src/services/income-records.js');const {tx}=await import('../src/db.js');
-    await tx(c=>reconcileIncome(c,userId));
-    let rows=(await (await request(`/api/income-records?month=${month}`)).json() as {rows:{id:number;match_status:string}[]}).rows;
-    assert.equal(rows.find(r=>r.id===a.id)!.match_status,'needs_review');assert.equal(rows.find(r=>r.id===b.id)!.match_status,'needs_review');
-    const matches=await Promise.all([send(`/api/income-records/${a.id}/match`,'POST',{txn_id:transaction}),send(`/api/income-records/${b.id}/match`,'POST',{txn_id:transaction})]);
-    assert.deepEqual(matches.map(r=>r.status).sort(),[200,409]);
-    for(const [index,kind] of ['excluded','internal_transfer','legacy'].entries()) {
-      const amount=22345+index;
-      const txnId=await seedTxn({date:`${month}-15`,amount,direction:'credit'});
-      if(kind==='legacy') await db.pool.query('update txn set is_internal_transfer=true where id=$1',[txnId]);
-      else await db.pool.query('insert into txn_annotation(txn_id,classification) values($1,$2)',[txnId,kind]);
-      const income=await (await send('/api/income-records','POST',{...body,gross_amount_satang:amount})).json() as {id:number;match_status:string};
-      assert.equal(income.match_status,'pending');
-      assert.equal((await send(`/api/income-records/${income.id}/match`,'POST',{txn_id:txnId})).status,409);
-    }
-    const base={name:'Owned schedule',total_amount_satang:900,installment_count:3,frequency_unit:'month',first_due_date:`${month}-20`};
-    const installment=await (await send('/api/installment-plans','POST',base)).json() as {id:number;dues:{id:number}[]};
-    const foreign=(await db.pool.query(`select id from app_user where google_sub='slice6-admin'`)).rows[0]!.id;
-    await send('/test/login','POST',{userId:foreign});
-    assert.equal((await request(`/api/installment-plans/${installment.id}`)).status,404);
-    assert.equal((await send(`/api/installment-plans/${installment.id}`,'PATCH',{name:'Stolen'})).status,404);
-    assert.equal((await send(`/api/installment-dues/${installment.dues[0]!.id}/payments`,'POST',{amount_satang:100,paid_date:`${month}-20`,bank_account_id:accountId})).status,404);
-    assert.equal((await send('/api/installment-plans','POST',{...base,default_account_id:accountId})).status,400);
-    assert.equal((await send('/api/income-records','POST',body)).status,400);
-    await send('/test/login','POST',{userId});
+    assert.notEqual(a.id,b.id);
+    const rows=(await (await request(`/api/income-records?month=${month}`)).json() as {rows:{id:number}[]}).rows;
+    assert.equal(rows.filter(r=>r.id===a.id||r.id===b.id).length,2);
   });
 
   await t.test('ยอดประมาณการ: จ่ายแล้วคือจบ ไม่มี partial และดูส่วนต่างจากที่ประมาณไว้ได้', async () => {
@@ -858,22 +671,14 @@ test('monthly planning API', async (t) => {
       amount_satang: 380_000, paid_date: payDate, bank_account_id: accountId,
     });
     assert.equal(declared.status, 201);
-    const paymentId = ((await declared.json()) as { id: number }).id;
     const under = await getPlan(MONTH_ESTIMATED);
-    assert.equal(itemNamed(under, 'ค่าน้ำ ค่าไฟ').payment_state, 'declared');
+    assert.equal(itemNamed(under, 'ค่าน้ำ ค่าไฟ').payment_state, 'paid');
     // ส่วนต่างที่หน้าจอคิดเอง (ไม่มี field ใหม่จาก API) และการ์ดสรุปต้องไม่นับเป็น partial
     assert.equal(itemNamed(under, 'ค่าน้ำ ค่าไฟ').paid_satang - 400_000, -20_000);
     assert.equal(under.payment_status.partial_count, 0);
 
-    // จับคู่ statement ครบ → verified ทั้งที่ยอดไม่ถึงที่ประมาณไว้ (ยอดคงที่จะยังเป็น partial)
-    // ยืนยันคู่เอง ไม่ปล่อย auto: POST /payments เรียก reconcilePayments ในตัว ถ้า seed txn ไว้ก่อน
-    // จะกระโดดไป verified ทันทีแล้วไม่ได้ทดสอบเคส declared เลย
-    const txnId = await seedTxn({ date: payDate, amount: 380_000, direction: 'debit' });
-    assert.equal((await send(`/api/monthly-item-payments/${paymentId}`, 'PATCH', { txn_id: txnId })).status, 200);
-    assert.equal(itemNamed(await getPlan(MONTH_ESTIMATED), 'ค่าน้ำ ค่าไฟ').payment_state, 'verified');
-
-    // จ่ายเพิ่ม 500 (รวม 4,300 สูงกว่าที่ประมาณไว้) แถวใหม่ยังไม่มีคู่ → กลับเป็นรอ statement
-    // ตาม §16 ข้อ 6 — เงื่อนไข verified คือ matched = paid ไม่ใช่ matched > 0
+    // จ่ายเพิ่ม 500 (รวม 4,300 สูงกว่าที่ประมาณไว้) ก็ยัง "จ่ายแล้ว" ส่วนต่างพลิกเป็นบวก
+    // ยอดคงที่ที่จ่ายไม่ถึงแผนจะเป็น partial แต่ยอดประมาณการไม่มีสถานะนั้น
     assert.equal(
       (await send(`/api/monthly-plan-items/${item.id}/payments`, 'POST', {
         amount_satang: 50_000, paid_date: `${MONTH_ESTIMATED}-11`, bank_account_id: accountId,
@@ -881,8 +686,12 @@ test('monthly planning API', async (t) => {
       201,
     );
     const over = itemNamed(await getPlan(MONTH_ESTIMATED), 'ค่าน้ำ ค่าไฟ');
-    assert.equal(over.payment_state, 'declared');
+    assert.equal(over.payment_state, 'paid');
     assert.equal(over.paid_satang - over.planned_amount_satang, 30_000);
+
+    // ยกเลิกทั้งสองแถวแล้วต้องกลับไป "ยังไม่จ่าย" ไม่ใช่ค้าง paid จากประวัติที่ยกเลิกไปแล้ว
+    for (const pay of over.payments) await send(`/api/monthly-item-payments/${pay.id}`, 'PATCH', { status: 'cancelled' });
+    assert.equal(itemNamed(await getPlan(MONTH_ESTIMATED), 'ค่าน้ำ ค่าไฟ').payment_state, 'unpaid');
   });
 
 });
