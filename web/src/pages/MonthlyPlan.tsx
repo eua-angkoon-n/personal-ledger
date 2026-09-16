@@ -28,9 +28,9 @@ import ReplayRounded from '@mui/icons-material/ReplayRounded';
 import LockOutlined from '@mui/icons-material/LockOutlined';
 import LockOpenOutlined from '@mui/icons-material/LockOpenOutlined';
 import PaidRounded from '@mui/icons-material/PaidRounded';
-import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import SkipNextRounded from '@mui/icons-material/SkipNextRounded';
 import {
+  del,
   patch,
   post,
   req,
@@ -41,7 +41,6 @@ import {
   type PlanItemPayment,
   type PlanKind,
   type RecurringRule,
-  type TxnListResponse,
 } from '../api.js';
 import Modal from '../Modal.js';
 import Money from '../components/Money.js';
@@ -54,16 +53,6 @@ import { formatDate, parseBahtToSatang } from '../format.js';
 import { dataTextSx, descriptionSx } from '../theme.js';
 import { ConfirmDialog, EmptyState, FeedbackSnackbar, LoadError, PageHeader, TableSkeleton, type Notice } from '../ui.js';
 
-// ตัวจับคู่จริงใช้ abs(txn_date - paid_date) <= 3 (src/services/payment-reconciliation.ts) —
-// candidate ที่ modal เสนอต้องใช้กรอบเดียวกัน ไม่ใช่ "เดือนของ paid_date" ซึ่งเพี้ยนสองทาง:
-// กลางเดือนจะเสนอ txn ที่ห่างได้ ~30 วัน และต้นเดือนจะซ่อน candidate ปลายเดือนก่อนที่ server นับไว้
-const MATCH_WINDOW_DAYS = 3;
-
-function shiftDays(isoDate: string, delta: number): string {
-  const d = new Date(`${isoDate}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return d.toISOString().slice(0, 10);
-}
 
 // API จำกัดการวางแผนล่วงหน้าไว้ 12 เดือน (MAX_MONTHS_AHEAD ใน src/routes/monthly-plans.ts)
 const MAX_MONTH = shiftMonth(currentMonth(), 12);
@@ -132,11 +121,6 @@ export default function MonthlyPlan() {
   const [paymentForm, setPaymentForm] = useState(EMPTY_PAYMENT);
   const setPaymentField = createFormFieldChangeHandler(setPaymentForm);
 
-  const [reviewing, setReviewing] = useState<{ item: PlanItem; payment: PlanItemPayment } | null>(null);
-  const [candidates, setCandidates] = useState<TxnListResponse['rows']>([]);
-  const [candidatesError, setCandidatesError] = useState('');
-  const [candidatesLoading, setCandidatesLoading] = useState(false);
-  const candidateRequestIdRef = useRef(0);
   const [archivingRule, setArchivingRule] = useState<RecurringRule | null>(null);
   // ปุ่มต้นทางของ dialog บางตัวหายไปหลังทำสำเร็จ ("ปิดเดือนนี้" ถูกแทนด้วยปุ่มเปิดเดือน, "เลือกคู่"
   // หายเมื่อ payment ไม่ needs_review แล้ว) MUI คืน focus ให้เฉพาะเมื่อ element เดิมยังอยู่ —
@@ -196,7 +180,7 @@ export default function MonthlyPlan() {
   // มี modal เปิดอยู่ค่อยแสดงในฟอร์ม (อยู่ติดกับสิ่งที่ผู้ใช้กรอกผิด) ไม่มีก็ส่งเข้า snackbar
   const run = async (action: () => Promise<unknown>, successMessage: string, onDone?: () => void) => {
     // ConfirmDialog (closing / archivingRule) ไม่มีช่องแสดง error ในตัว จึงไม่นับเป็น "อยู่ในฟอร์ม"
-    const inModal = itemModalOpen || ruleModalOpen || payingItem != null || reviewing != null;
+    const inModal = itemModalOpen || ruleModalOpen || payingItem != null;
     setFormError('');
     setSubmitting(true);
     try {
@@ -328,13 +312,20 @@ export default function MonthlyPlan() {
 
   // เติมค่าเริ่มต้นให้ครบที่สุดที่รู้: ยอดคงเหลือที่ยังไม่จ่าย, วันครบกำหนด และ "บัญชีที่คาดว่าจะใช้"
   // ของรายการประจำต้นทาง (§9.2) — ถ้าไม่อ่านค่านั้นที่นี่ ช่องนั้นในฟอร์มกฎก็ไม่มีใครใช้เลย
+  //
+  // ยกเว้นยอด: รายการยอดประมาณการปล่อยช่องว่างให้พิมพ์ยอดจากบิลจริง — reconcile เทียบยอดเป๊ะถึงสตางค์
+  // (`t.amount_satang = p.amount_satang`) เติมยอดที่เดาไว้ให้แล้วผู้ใช้กดผ่าน = ประกาศจ่าย 4,000
+  // ที่ไม่มี txn ไหนตรง ค้างรอ statement ถาวร ขณะที่เงินออกจริง 3,800 ลอยไม่ถูกจับคู่
   const openPayment = (item: PlanItem) => {
     const remaining = Math.max(0, item.planned_amount_satang - item.paid_satang);
     const rule = item.recurring_rule_id == null ? undefined : rules.find((r) => r.id === item.recurring_rule_id);
     const defaultAccountId = rule?.default_account_id ?? accounts[0]?.id ?? null;
     setPayingItem(item);
     setPaymentForm({
-      amount_baht: ((remaining > 0 ? remaining : item.planned_amount_satang) / 100).toFixed(2),
+      amount_baht:
+        item.amount_mode === 'estimated'
+          ? ''
+          : ((remaining > 0 ? remaining : item.planned_amount_satang) / 100).toFixed(2),
       paid_date: item.due_date ?? `${month}-01`,
       bank_account_id: defaultAccountId == null ? '' : String(defaultAccountId),
     });
@@ -355,42 +346,9 @@ export default function MonthlyPlan() {
           paid_date: paymentForm.paid_date,
           bank_account_id: Number(paymentForm.bank_account_id),
         }),
-      'บันทึกการจ่ายแล้ว — ระบบจะจับคู่กับ statement ให้เมื่อข้อมูลมาถึง',
+      'บันทึกการจ่ายแล้ว',
       () => setPayingItem(null),
     );
-  };
-
-  // needs_review = มี txn เข้าเกณฑ์มากกว่าหนึ่งรายการ ระบบไม่เดาให้ (§9.5) ให้ผู้ใช้เลือกเอง
-  // ดึง candidate จาก GET /api/transactions ที่มีอยู่แล้ว (บัญชี + ยอดตรง + เดือนของวันที่จ่าย)
-  const openReview = (item: PlanItem, payment: PlanItemPayment) => {
-    const requestId = ++candidateRequestIdRef.current;
-    setReviewing({ item, payment });
-    setCandidates([]);
-    setCandidatesError('');
-    setCandidatesLoading(true);
-    setFormError('');
-    const params = new URLSearchParams({
-      from: shiftDays(payment.paid_date, -MATCH_WINDOW_DAYS),
-      to: shiftDays(payment.paid_date, MATCH_WINDOW_DAYS),
-      bank_account_id: String(payment.bank_account_id),
-      min_satang: String(payment.amount_satang),
-      max_satang: String(payment.amount_satang),
-      direction: item.kind === 'income' ? 'credit' : 'debit',
-    });
-    void req<TxnListResponse>(`/api/transactions?${params.toString()}`)
-      .then((r) => {
-        // เปิดรายการอื่นไปแล้วระหว่างรอ — ทิ้งผลที่มาช้า ไม่งั้น candidate ของรายการก่อนจะโผล่
-        // ในกล่องของรายการใหม่ แล้วผู้ใช้กดผูก txn ผิดรายการได้
-        if (requestId !== candidateRequestIdRef.current) return;
-        setCandidates(r.rows);
-      })
-      .catch((e: unknown) => {
-        if (requestId !== candidateRequestIdRef.current) return;
-        setCandidatesError(errorMessage(e, 'โหลดรายการที่เข้าเกณฑ์ไม่สำเร็จ'));
-      })
-      .finally(() => {
-        if (requestId === candidateRequestIdRef.current) setCandidatesLoading(false);
-      });
   };
 
   const summary = plan?.payment_status;
@@ -510,15 +468,7 @@ export default function MonthlyPlan() {
                   <Chip label={`ยังไม่จ่าย ${summary.unpaid_count}`} variant="outlined" />
                   <Chip label={`เกินกำหนด ${summary.overdue_count}`} color={summary.overdue_count > 0 ? 'error' : 'default'} variant={summary.overdue_count > 0 ? 'filled' : 'outlined'} />
                   <Chip label={`จ่ายบางส่วน ${summary.partial_count}`} variant="outlined" />
-                  <Chip label={`รอ statement ${summary.declared_count}`} variant="outlined" />
-                  <Chip label={`ยืนยันแล้ว ${summary.verified_count}`} color={summary.verified_count > 0 ? 'success' : 'default'} variant={summary.verified_count > 0 ? 'filled' : 'outlined'} />
-                  {summary.needs_review_count > 0 && (
-                    <Chip
-                      icon={<WarningAmberRounded />}
-                      label={`ต้องเลือกคู่เอง ${summary.needs_review_count}`}
-                      variant="outlined"
-                    />
-                  )}
+                  <Chip label={`จ่ายแล้ว ${summary.paid_count}`} color={summary.paid_count > 0 ? 'success' : 'default'} variant={summary.paid_count > 0 ? 'filled' : 'outlined'} />
                 </Stack>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
                   จ่ายแล้ว <Money satang={summary.paid_satang} /> จากยอดตามแผน <Money satang={summary.total_due_satang} />
@@ -561,7 +511,6 @@ export default function MonthlyPlan() {
                   </TableHead>
                   <TableBody>
                     {items.map((item) => {
-                      const review = item.payments.find((p) => p.status === 'needs_review');
                       const inactive = item.explicit_status !== 'active';
                       return (
                         <TableRow key={item.id} hover>
@@ -583,23 +532,57 @@ export default function MonthlyPlan() {
                           <TableCell>
                             <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                               <PaymentStatusChip state={item.payment_state} />
-                              {review && item.income_record_id == null && (
-                                <Button size="small" color="inherit" onClick={() => openReview(item, review)}>
-                                  เลือกคู่
-                                </Button>
-                              )}
+                              {/* ยอดประมาณการไม่มีสถานะ partial แล้ว สถานะจึงไม่บอกว่ายอดจริงต่าง
+                                  จากที่เดาไว้เท่าไร ต้องโชว์ตรงนี้ — คิดสดจาก paid − planned ไม่มี
+                                  field ใหม่จาก API ไม่ใส่สี เพราะสูง/ต่ำกว่าประมาณไม่ใช่ดี/ร้าย
+                                  (เหตุผลเดียวกับ comment ใน PaymentStatusChip.tsx)
+
+                                  ข้าม item ที่ผูก income_record: `planned_amount_satang` ของมันคือ
+                                  ยอดเต็ม แต่ payment คือยอดสุทธิ ส่วนต่างจึงเป็นรายการหัก ไม่ใช่
+                                  การประมาณคลาด — ยอดเต็ม/หัก/สุทธิ ดูได้ในตาราง "รายได้และรายการหัก" */}
+                              {item.amount_mode === 'estimated' &&
+                                item.income_record_id == null &&
+                                item.paid_satang > 0 &&
+                                item.paid_satang !== item.planned_amount_satang && (
+                                  <Typography variant="caption" color="text.secondary">
+                                    {item.paid_satang < item.planned_amount_satang
+                                      ? 'ต่ำกว่าประมาณ '
+                                      : 'สูงกว่าประมาณ '}
+                                    <Money satang={item.paid_satang - item.planned_amount_satang} />
+                                  </Typography>
+                                )}
                             </Stack>
                           </TableCell>
                           <TableCell align="right">
                             <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
-                              <Button
-                                size="small"
-                                startIcon={<PaidRounded />}
-                                disabled={closed || inactive || item.income_record_id != null || item.installment_due_id != null}
-                                onClick={() => openPayment(item)}
-                              >
-                                จ่ายแล้ว
-                              </Button>
+                              {/* "จ่ายแล้ว" เป็นปุ่มของรายจ่าย/เงินกันไว้เท่านั้น — เงินเข้าต้องบันทึกที่
+                                  "รายได้และรายการหัก" เพื่อแยกยอดเต็มออกจากยอดสุทธิ (ADR-0002 ข้อ 5)
+                                  เดิมปุ่มนี้กดบนรายการรายได้ได้ แล้วประกาศจ่ายยอดสุทธิที่เข้าบัญชีจริง
+                                  (26,125) ไปเทียบกับยอดเต็มตามแผน (27,000) → ค้าง "จ่ายบางส่วน"
+                                  รายการหักจากเงินเดือนไม่มีปุ่มอะไรเลย เงินไม่ได้ออกจากบัญชีเรา
+                                  มันขึ้น "หักจากรายได้" เองเมื่อถูกผูกจากฟอร์มรายได้
+
+                                  เงื่อนไข `paid_satang === 0`: แถวที่ยังมีประกาศจ่ายค้างอยู่ต้องเหลือ
+                                  ปุ่ม "จ่ายแล้ว" ไว้ เพราะปุ่มยกเลิกการประกาศจ่ายอยู่ใน modal นั้น
+                                  ที่เดียว ถ้าสลับเป็น anchor ทั้งหมด จะยกเลิกของเก่าไม่ได้ และ
+                                  dropdown ในฟอร์มรายได้ซ่อนรายการที่ยังมี payment อยู่ = ตัน
+                                  ยกเลิกแล้ว paid_satang กลับเป็น 0 ปุ่มจะสลับเป็น anchor ให้เอง */}
+                              {item.kind === 'income' && item.income_record_id == null && item.paid_satang === 0 ? (
+                                <Button size="small" startIcon={<PaidRounded />} href="#income-heading" disabled={closed || inactive}>
+                                  บันทึกรายได้เต็ม
+                                </Button>
+                              ) : item.kind === 'payroll_deduction' &&
+                                item.income_record_id == null &&
+                                item.paid_satang === 0 ? null : (
+                                <Button
+                                  size="small"
+                                  startIcon={<PaidRounded />}
+                                  disabled={closed || inactive || item.income_record_id != null || item.installment_due_id != null}
+                                  onClick={() => openPayment(item)}
+                                >
+                                  จ่ายแล้ว
+                                </Button>
+                              )}
                               <Button
                                 size="small"
                                 startIcon={<EditRounded />}
@@ -639,6 +622,20 @@ export default function MonthlyPlan() {
                                   ข้าม
                                 </Button>
                               )}
+                              <Button
+                                size="small"
+                                color="error"
+                                startIcon={<DeleteOutlineRounded />}
+                                disabled={closed || item.income_record_id != null || item.installment_due_id != null}
+                                onClick={() =>
+                                  void run(
+                                    () => del(`/api/monthly-plan-items/${item.id}`),
+                                    'ลบรายการแล้ว',
+                                  )
+                                }
+                              >
+                                ลบ
+                              </Button>
                               {item.income_record_id != null && <Typography variant="body2" color="text.secondary">จัดการในรายได้ด้านบน</Typography>}
                               {item.installment_due_id != null && <Button component={Link} to="/installments">ดูแผนผ่อน</Button>}
                             </Stack>
@@ -991,13 +988,7 @@ export default function MonthlyPlan() {
                               {formatDate(p.paid_date)}
                             </Box>{' '}
                             · {p.account_nickname} ·{' '}
-                            {p.status === 'matched'
-                              ? 'ยืนยันจาก statement แล้ว'
-                              : p.status === 'needs_review'
-                                ? 'มีธุรกรรมเข้าเกณฑ์หลายรายการ ต้องเลือกเอง'
-                                : p.status === 'cancelled'
-                                  ? 'ยกเลิกแล้ว'
-                                  : 'รอ statement'}
+                            {p.status === 'cancelled' ? 'ยกเลิกแล้ว' : 'บันทึกไว้แล้ว'}
                           </Typography>
                         </Box>
                         {p.status !== 'cancelled' && (
@@ -1034,64 +1025,6 @@ export default function MonthlyPlan() {
             </Stack>
           </Stack>
         </Box>
-      </Modal>
-
-      <Modal open={reviewing != null} title="เลือกธุรกรรมที่ตรงกับการจ่ายนี้" onClose={() => setReviewing(null)} busy={submitting}>
-        <Stack spacing={2}>
-          <Typography color="text.secondary" sx={descriptionSx}>
-            มีธุรกรรมเข้าเกณฑ์มากกว่าหนึ่งรายการ ระบบจึงไม่จับคู่ให้เอง — เลือกรายการที่ตรงกับ{' '}
-            {reviewing?.item.name} จำนวน <Money satang={reviewing?.payment.amount_satang ?? 0} /> วันที่{' '}
-            <Box component="span" sx={dataTextSx}>
-              {reviewing ? formatDate(reviewing.payment.paid_date) : ''}
-            </Box>{' '}
-            (ค้นในกรอบ ±{MATCH_WINDOW_DAYS} วัน เท่ากับเกณฑ์ที่ระบบใช้จับคู่)
-          </Typography>
-          {candidatesError && <Alert severity="error">{candidatesError}</Alert>}
-          {formError && <Alert severity="error">{formError}</Alert>}
-          {candidatesLoading ? (
-            <Typography color="text.secondary" role="status" aria-busy>
-              กำลังค้นธุรกรรมที่เข้าเกณฑ์…
-            </Typography>
-          ) : candidates.length === 0 ? (
-            <Typography color="text.secondary">ไม่พบธุรกรรมที่เข้าเกณฑ์ในบัญชีและกรอบเวลานี้</Typography>
-          ) : (
-            <Stack spacing={1}>
-              {candidates.map((txn) => (
-                <Paper key={txn.id} variant="outlined" sx={{ p: 1.5 }}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                    <Box>
-                      <Box component="span" sx={dataTextSx}>
-                        {formatDate(txn.txn_date)}
-                      </Box>{' '}
-                      {txn.description || '(ไม่มีรายละเอียด)'}
-                      <Typography variant="body2" color="text.secondary">
-                        {txn.account_nickname} · <Money satang={txn.amount_satang} />
-                      </Typography>
-                    </Box>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      disabled={submitting}
-                      onClick={() =>
-                        void run(
-                          () => patch(`/api/monthly-item-payments/${reviewing!.payment.id}`, { txn_id: txn.id }),
-                          'จับคู่กับธุรกรรมแล้ว',
-                          () => {
-                            setReviewing(null);
-                            // ปุ่ม "เลือกคู่" ต้นทางหายไปแล้ว (payment ไม่ needs_review อีก) focus จะตกที่ body
-                            addItemButtonRef.current?.focus();
-                          },
-                        )
-                      }
-                    >
-                      เลือกรายการนี้
-                    </Button>
-                  </Stack>
-                </Paper>
-              ))}
-            </Stack>
-          )}
-        </Stack>
       </Modal>
 
       <ConfirmDialog

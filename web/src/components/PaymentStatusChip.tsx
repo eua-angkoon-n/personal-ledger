@@ -4,12 +4,12 @@ import BlockRounded from '@mui/icons-material/BlockRounded';
 import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded';
 import DonutLargeRounded from '@mui/icons-material/DonutLargeRounded';
 import RadioButtonUncheckedRounded from '@mui/icons-material/RadioButtonUncheckedRounded';
-import ScheduleRounded from '@mui/icons-material/ScheduleRounded';
 import SkipNextRounded from '@mui/icons-material/SkipNextRounded';
 import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import type { PaymentState } from '../api.js';
 
-// สถานะการจ่าย 6 แบบตาม §8.2
+// สถานะการจ่ายตาม §8.2 — ไม่มี "รอ statement"/"ยืนยันแล้ว" แล้ว แผนไม่ผูกกับ statement
+// การจ่ายคือสิ่งที่ผู้ใช้บันทึกเอง จบที่ "จ่ายแล้ว" ส่วนรายได้จบที่ "บันทึกรายได้แล้ว"
 //
 // DESIGN.md มีแค่ accent/income/expense/neutral — ไม่มีสี warning และ accent สงวนไว้สำหรับ
 // action/focus/selection (Restrained Accent Rule) จึงใช้ได้แค่ error (=expense) กับ success (=income)
@@ -23,8 +23,8 @@ const SPECS: Record<PaymentState, Spec> = {
   unpaid: { label: 'ยังไม่จ่าย', color: 'default', icon: <RadioButtonUncheckedRounded /> },
   overdue: { label: 'เกินกำหนด', color: 'error', icon: <WarningAmberRounded /> },
   partial: { label: 'จ่ายบางส่วน', color: 'default', icon: <DonutLargeRounded /> },
-  declared: { label: 'จ่ายแล้ว รอ statement', color: 'default', icon: <ScheduleRounded /> },
-  verified: { label: 'ยืนยันจาก statement', color: 'success', icon: <CheckCircleRounded /> },
+  paid: { label: 'จ่ายแล้ว', color: 'success', icon: <CheckCircleRounded /> },
+  received: { label: 'บันทึกรายได้แล้ว', color: 'success', icon: <CheckCircleRounded /> },
   skipped: { label: 'ข้ามเดือนนี้', color: 'default', icon: <SkipNextRounded /> },
   cancelled: { label: 'ยกเลิก', color: 'default', icon: <BlockRounded /> },
 };

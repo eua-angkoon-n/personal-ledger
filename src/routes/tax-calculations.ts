@@ -188,11 +188,8 @@ async function unrecordedIncomeTxns(userId: number, taxEntityId: number, taxYear
          and coalesce(an.classification, '') not in ('internal_transfer', 'excluded')
          and an.tax_treatment is distinct from 'business_income'
          and t.amount_satang >= ${RECURRING_MIN_SATANG}
-         and not exists (
-           select 1 from monthly_item_payment p
-           join income_record ir on ir.monthly_plan_item_id = p.monthly_plan_item_id
-           where p.txn_id = t.id and p.status = 'matched'
-         )
+         -- เดิมกรองธุรกรรมที่ผูกกับ income_record ไปแล้วออก แต่ไม่มีสายผูกนั้นอีกแล้ว
+         -- รายการที่บันทึกเป็นรายได้ไปแล้วจึงยังขึ้นเป็นข้อเสนอแนะอยู่ ผู้ใช้ข้ามเองได้
      ),
      recurring as (
        select pattern, bank_account_id from candidates

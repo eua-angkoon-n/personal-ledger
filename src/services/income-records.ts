@@ -15,30 +15,6 @@ type DB = Pick<Pool | PoolClient, "query">;
 export async function lockIncome(db: DB, userId: number) {
   await db.query("select pg_advisory_xact_lock(600, $1::int)", [userId]);
 }
-const CANDIDATES = `select r.id as income_record_id, t.id, t.txn_date, t.description, t.amount_satang,
-  a.nickname as account_nickname, count(*) over(partition by r.id)::int as candidate_count,
-  count(*) over(partition by t.id)::int as income_count
-  from income_record r
-  join monthly_plan_item i on i.id=r.monthly_plan_item_id and i.explicit_status='active'
-  join bank_account a on a.id=r.bank_account_id and a.user_id=r.user_id
-  join txn t on t.bank_account_id=a.id and t.direction='credit'
-    and t.amount_satang=r.expected_net_satang and abs(t.txn_date-r.income_date)<=3
-  where r.user_id=$1 and r.expected_net_satang>0
-    and not t.is_internal_transfer
-    and not exists(select 1 from monthly_item_payment p where p.monthly_plan_item_id=i.id and p.status<>'cancelled')
-    and not exists(select 1 from monthly_item_payment p where p.txn_id=t.id and p.status='matched')
-    and not exists(select 1 from txn_annotation ta where ta.txn_id=t.id and ta.classification in ('internal_transfer','excluded'))
-    and not exists(select 1 from transfer_match tm where tm.status='confirmed' and (tm.credit_txn_id=t.id or tm.debit_txn_id=t.id))`;
-export async function incomeCandidates(
-  db: DB,
-  userId: number,
-  incomeId?: number,
-) {
-  const { rows } = await db.query(CANDIDATES, [userId]);
-  return incomeId == null
-    ? rows
-    : rows.filter((r) => r.income_record_id === incomeId);
-}
 export async function loadIncome(
   db: DB,
   userId: number,
@@ -65,64 +41,13 @@ export async function incomeRows(
 ) {
   const { rows } = await db.query(
     `select r.*,mp.month_start,
-    (select p.txn_id from monthly_item_payment p where p.monthly_plan_item_id=r.monthly_plan_item_id and p.status='matched' limit 1) as deposit_txn_id,
     coalesce((select json_agg(d order by d.id) from income_deduction d where d.income_record_id=r.id),'[]'::json) as deductions
     from income_record r join monthly_plan mp on mp.id=r.monthly_plan_id and mp.user_id=r.user_id
     where r.user_id=$1 and ($2::date is null or mp.month_start=$2) and ($3::bigint is null or r.id=$3)
     order by r.id`,
     [userId, month ? `${month}-01` : null, incomeId ?? null],
   );
-  const candidates = await incomeCandidates(db, userId);
-  return rows.map((row) => ({
-    ...row,
-    match_status:
-      row.expected_net_satang === 0
-        ? "not_required"
-        : row.deposit_txn_id
-          ? "matched"
-          : candidates.some(
-                (c) =>
-                  c.income_record_id === row.id &&
-                  (c.candidate_count > 1 || c.income_count > 1),
-              )
-            ? "needs_review"
-            : "pending",
-  }));
-}
-export async function matchIncome(
-  db: DB,
-  userId: number,
-  incomeId: number,
-  txnId: number,
-) {
-  const row = await loadIncome(db, userId, incomeId);
-  const candidates = await incomeCandidates(db, userId, incomeId);
-  const candidate = candidates.find((c) => c.id === txnId);
-  if (!candidate)
-    throw new HttpError(409, "ธุรกรรมไม่ตรงเกณฑ์หรือถูกจับคู่แล้ว");
-  await db.query("select id from txn where id=$1 for update", [txnId]);
-  await db.query(
-    `insert into monthly_item_payment(monthly_plan_item_id,amount_satang,paid_date,bank_account_id,txn_id,status,verified_at)
-    values($1,$2,$3,$4,$5,'matched',now())`,
-    [
-      row.monthly_plan_item_id,
-      row.expected_net_satang,
-      candidate.txn_date,
-      row.bank_account_id,
-      txnId,
-    ],
-  );
-}
-export async function reconcileIncome(db: DB, userId: number) {
-  await lockIncome(db, userId);
-  const candidates = await incomeCandidates(db, userId);
-  for (const candidate of candidates) {
-    if (candidate.candidate_count !== 1 || candidate.income_count !== 1)
-      continue;
-    const income = await loadIncome(db, userId, candidate.income_record_id);
-    if (income.auto_match)
-      await matchIncome(db, userId, income.id, candidate.id);
-  }
+  return rows;
 }
 type DeductionInput = {
   deduction_type: string;
@@ -239,8 +164,6 @@ export async function saveIncome(
       : isoDate(values, "income_date");
   if (date && date.slice(0, 7) !== month)
     throw new HttpError(400, "วันที่รับเงินต้องอยู่ในเดือนรายได้");
-  if (values.auto_match != null && typeof values.auto_match !== "boolean")
-    throw new HttpError(400, "auto_match ต้องเป็น boolean");
   await assertOwnedRefs(db, userId, { bankAccountId: account });
   const oldDeductions = previous
     ? (
@@ -262,32 +185,6 @@ export async function saveIncome(
   );
   if (
     previous &&
-    (
-      await db.query(
-        "select 1 from monthly_item_payment where monthly_plan_item_id=$1 and status<>'cancelled'",
-        [previous.monthly_plan_item_id],
-      )
-    ).rowCount
-  ) {
-    // Reconciliation evidence must retain the financial meaning it verified.
-    const financial = gross !== previous.gross_amount_satang || account !== previous.bank_account_id ||
-      date !== previous.income_date ||
-      (b.monthly_plan_item_id != null && Number(b.monthly_plan_item_id) !== previous.monthly_plan_item_id) ||
-      JSON.stringify(deductions) !== JSON.stringify(deductionsInput(oldDeductions));
-    if (financial)
-      throw new HttpError(409, "ต้องยกเลิกคู่เงินเข้าก่อนแก้รายได้");
-    await db.query(
-      "update income_record set name=$2,auto_match=$3,updated_at=now() where id=$1",
-      [incomeId, name, values.auto_match ?? true],
-    );
-    await db.query("update monthly_plan_item set name=$2 where id=$1", [
-      previous.monthly_plan_item_id,
-      name,
-    ]);
-    return incomeId!;
-  }
-  if (
-    previous &&
     b.monthly_plan_item_id != null &&
     Number(b.monthly_plan_item_id) !== previous.monthly_plan_item_id
   )
@@ -307,8 +204,8 @@ export async function saveIncome(
   if (!previous)
     incomeId = (
       await db.query(
-        `insert into income_record(user_id,monthly_plan_id,monthly_plan_item_id,name,gross_amount_satang,expected_net_satang,bank_account_id,income_date,auto_match)
-    values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
+        `insert into income_record(user_id,monthly_plan_id,monthly_plan_item_id,name,gross_amount_satang,expected_net_satang,bank_account_id,income_date)
+    values($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
         [
           userId,
           plan.id,
@@ -318,14 +215,13 @@ export async function saveIncome(
           net,
           account,
           date,
-          values.auto_match ?? true,
         ],
       )
     ).rows[0]!.id;
   else
     await db.query(
-      `update income_record set name=$2,gross_amount_satang=$3,expected_net_satang=$4,bank_account_id=$5,income_date=$6,auto_match=$7,updated_at=now() where id=$1`,
-      [incomeId, name, gross, net, account, date, values.auto_match ?? true],
+      `update income_record set name=$2,gross_amount_satang=$3,expected_net_satang=$4,bank_account_id=$5,income_date=$6,updated_at=now() where id=$1`,
+      [incomeId, name, gross, net, account, date],
     );
   await db.query(
     "update monthly_plan_item set income_record_id=$2,due_date=$3 where id=$1",
@@ -357,6 +253,5 @@ export async function saveIncome(
         "update monthly_plan_item set explicit_status='cancelled' where id=$1",
         [old.monthly_plan_item_id],
       );
-  await reconcileIncome(db, userId);
   return incomeId!;
 }

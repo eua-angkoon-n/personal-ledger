@@ -10,17 +10,16 @@ type Queryable = Pick<Pool | PoolClient, 'query'>;
 /**
  * ยอดจ่ายต่อ item — ผู้เรียกต้องมี `monthly_plan_item i` อยู่ใน FROM แล้ว และได้ alias `pay` กลับไป
  *
- * `paid_satang` = ยอดที่ผู้ใช้ประกาศว่าจ่ายแล้ว นับ declared + matched + **needs_review** ด้วย:
- * needs_review หมายถึงระบบเจอ txn เข้าเกณฑ์หลายรายการจึงไม่เดาให้ ไม่ได้หมายความว่าผู้ใช้ไม่ได้จ่าย
- * ถ้าไม่นับ รายการที่เพิ่ง mark paid แล้วเจอคู่กำกวมจะเด้งกลับเป็น "ยังไม่จ่าย/เกินกำหนด" ทันที
- * ซึ่งขัดกับสิ่งที่ผู้ใช้เพิ่งบันทึก มีแต่ `cancelled` ที่ไม่นับ (ยกเลิกไปแล้ว)
- * `matched_satang` นับเฉพาะ matched — เป็นตัวแยก "จ่ายแล้ว รอ statement" ออกจาก "ยืนยันแล้ว" (§17)
+ * `paid_satang` = ยอดที่ผู้ใช้บันทึกว่าจ่ายแล้ว มีแต่ `cancelled` ที่ไม่นับ (ยกเลิกไปแล้ว)
+ *
+ * ไม่มี `matched_satang` แล้ว: การวางแผนไม่ผูกกับ statement อีกต่อไป ยอดจริงในบิลกับยอดที่วางแผนไว้
+ * ไม่เท่ากันเป็นเรื่องปกติ (ค่าน้ำค่าไฟ, งวดผ่อนที่ปัดเศษต่างกัน 36 สตางค์) การบังคับให้ตรงกันเป๊ะ
+ * ทำให้บิลที่จ่ายไปแล้วจริงค้างสถานะ "รอ statement" ตลอดไปโดยผู้ใช้แก้ไม่ได้ กระแสเงินสดจริงอ่าน
+ * จาก `txn` ที่หน้า Dashboard/รายงานอยู่แล้ว ไม่ต้องให้แผนมาทำซ้ำ
  */
 export const ITEM_PAID_SQL = `
   left join lateral (
-    select coalesce(sum(pm.amount_satang) filter (where pm.status <> 'cancelled'), 0)::bigint as paid_satang,
-           coalesce(sum(pm.amount_satang) filter (where pm.status = 'matched'), 0)::bigint as matched_satang,
-           count(*) filter (where pm.status = 'needs_review')::int as needs_review_count
+    select coalesce(sum(pm.amount_satang) filter (where pm.status <> 'cancelled'), 0)::bigint as paid_satang
     from monthly_item_payment pm
     where pm.monthly_plan_item_id = i.id
   ) pay on true`;
@@ -33,9 +32,19 @@ export const ITEM_PAID_SQL = `
  * `due_date < current_date` ให้ NULL ไม่ใช่ false เพราะฉะนั้นต้องเช็ค `is not null` ก่อน ไม่งั้น
  * CASE จะตกทั้งสาขาแล้วคืน NULL ออกไปเป็นสถานะ
  *
- * สาขา verified ต้องมี `matched_satang > 0` ด้วย ไม่ใช่แค่ `>= planned`: รายการยอดประมาณการ 0 บาท
- * (`amount_mode='estimated'` ที่ยังไม่รู้ยอด) จะเข้าเงื่อนไข `0 >= 0` แล้วขึ้นว่า "ยืนยันจาก statement แล้ว"
- * ทั้งที่ไม่มี txn ผูกอยู่เลย ขัด §16 ข้อ 6
+ * ไม่มี `verified` / `needs_review` แล้ว — แผนไม่ผูกกับ statement การจ่ายเป็นสิ่งที่ผู้ใช้บันทึกเอง
+ * `declared` จึงกลายเป็น `paid` เฉย ๆ ("จ่ายแล้ว") ไม่มีขั้นรอการยืนยันอีก
+ *
+ * รายได้ที่ผูก `income_record` แล้วคือ `received` — บันทึกรายได้เต็มไปแล้ว ไม่ต้องรอเงินเข้า
+ * (เดิมแยก pending/verified ตามการจับคู่เงินเข้า) ยอดสุทธิเป็นศูนย์ยังแยกเป็น `not_required` ไว้
+ * เพราะสื่อว่าไม่มีเงินเข้าบัญชีให้รอจริง ๆ ไม่ใช่แค่ยังไม่ถึงกำหนด
+ *
+ * ยอดประมาณการ (`amount_mode` ที่ copy ลง item ตอนกาง — migration 011) **ไม่มีสถานะ partial**:
+ * ยอดตามแผนเป็นการเดา บิลจริงสูงหรือต่ำกว่าก็ได้ ถ้าเทียบ `paid < planned` ตามปกติ เดือนที่บิลมาน้อย
+ * กว่าที่เดาไว้จะค้าง "จ่ายบางส่วน" ตลอดโดยผู้ใช้แก้ให้หายไม่ได้ ส่วนต่างไปแสดงบนหน้าจอโดยคิดสด
+ * จาก `paid_satang − planned_amount_satang` ไม่เก็บซ้ำ (§7.2)
+ *
+ * `partial` ยังอยู่สำหรับยอดคงที่ — จ่ายบิล 5,000 ไป 1,000 คือจ่ายไม่ครบจริง ๆ ไม่ใช่การประมาณคลาด
  */
 export const PAYMENT_STATE_SQL = `
   case
@@ -43,13 +52,12 @@ export const PAYMENT_STATE_SQL = `
     when i.kind = 'payroll_deduction' and i.income_record_id is not null then 'deducted'
     when i.kind = 'income' and i.income_record_id is not null and
       (select r.expected_net_satang from income_record r where r.id=i.income_record_id)=0 then 'not_required'
-    when i.kind = 'income' and i.income_record_id is not null and pay.matched_satang >=
-      (select r.expected_net_satang from income_record r where r.id=i.income_record_id) then 'verified'
+    when i.kind = 'income' and i.income_record_id is not null then 'received'
     when pay.paid_satang = 0 and i.due_date is not null and i.due_date < current_date then 'overdue'
     when pay.paid_satang = 0 then 'unpaid'
+    when i.amount_mode = 'estimated' then 'paid'
     when pay.paid_satang < i.planned_amount_satang then 'partial'
-    when pay.matched_satang > 0 and pay.matched_satang >= i.planned_amount_satang then 'verified'
-    else 'declared'
+    else 'paid'
   end`;
 
 export type PlanTotals = {
@@ -92,9 +100,7 @@ export type PaymentStatusSummary = {
   unpaid_count: number;
   overdue_count: number;
   partial_count: number;
-  declared_count: number;
-  verified_count: number;
-  needs_review_count: number;
+  paid_count: number;
 };
 
 /**
@@ -111,9 +117,7 @@ export async function paymentStatusSummary(db: Queryable, planId: number): Promi
        count(*) filter (where state = 'unpaid')::int as unpaid_count,
        count(*) filter (where state = 'overdue')::int as overdue_count,
        count(*) filter (where state = 'partial')::int as partial_count,
-       count(*) filter (where state = 'declared')::int as declared_count,
-       count(*) filter (where state = 'verified')::int as verified_count,
-       coalesce(sum(pay.needs_review_count), 0)::int as needs_review_count
+       count(*) filter (where state = 'paid')::int as paid_count
      from monthly_plan_item i
      ${ITEM_PAID_SQL}
      cross join lateral (select ${PAYMENT_STATE_SQL} as state) s

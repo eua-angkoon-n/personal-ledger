@@ -11,7 +11,7 @@ import { ConfirmDialog, EmptyState, LoadError, PageHeader, TableSkeleton } from 
 
 const STATUS = { active: 'กำลังผ่อน', completed: 'ชำระครบแล้ว', cancelled: 'ยกเลิกแล้ว' };
 const DUE_STATUS = { planned: 'รอชำระ', partially_paid: 'จ่ายบางส่วน', paid: 'จ่ายครบแล้ว', overdue: 'เกินกำหนด', skipped: 'ข้ามงวด — ยังมีหนี้', cancelled: 'ยกเลิกแล้ว' };
-const PAYMENT_STATUS = { declared: 'จ่ายแล้ว รอ Statement', matched: 'ยืนยันจาก Statement แล้ว', needs_review: 'ต้องเลือกคู่ Statement', cancelled: 'ยกเลิกแล้ว' };
+const PAYMENT_STATUS = { declared: 'จ่ายแล้ว', cancelled: 'ยกเลิกแล้ว' };
 const MONEY_FIELDS = { total_amount_satang: 'ราคาซื้อ (บาท)', down_payment_satang: 'เงินดาวน์ (บาท)', interest_satang: 'ดอกเบี้ยรวม (บาท)', fee_satang: 'ค่าธรรมเนียมรวม (บาท)' };
 type MoneyField = keyof typeof MONEY_FIELDS;
 type Form = Record<MoneyField, string> & { name: string; installment_count: string; frequency_unit: 'day' | 'month' | 'year'; frequency_interval: string; first_due_date: string; down_payment_date: string; default_account_id: string; category_id: string };
@@ -24,7 +24,7 @@ function readAmount(value: string) {
 }
 function Totals({ totals }: { totals: InstallmentTotals }) {
   return <Box component="dl" sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 2, my: 3 }}>
-    {([['ต้องชำระทั้งหมด', totals.total_payable_satang], ['ประกาศจ่ายแล้ว', totals.paid_satang], ['ยืนยันจาก Statement', totals.matched_satang], ['คงเหลือ', totals.outstanding_satang]] as const).map(([label, value]) => <Box key={label}><Typography component="dt" variant="body2" color="text.secondary">{label}</Typography><Box component="dd" sx={{ m: 0, mt: 0.5 }}><Money satang={value} /></Box></Box>)}
+    {([['ต้องชำระทั้งหมด', totals.total_payable_satang], ['จ่ายแล้ว', totals.paid_satang], ['คงเหลือ', totals.outstanding_satang]] as const).map(([label, value]) => <Box key={label}><Typography component="dt" variant="body2" color="text.secondary">{label}</Typography><Box component="dd" sx={{ m: 0, mt: 0.5 }}><Money satang={value} /></Box></Box>)}
   </Box>;
 }
 
@@ -116,7 +116,7 @@ export default function Installments() {
         <TableHead><TableRow><TableCell>งวด</TableCell><TableCell>ครบกำหนด</TableCell><TableCell align="right">ต้องชำระ</TableCell><TableCell align="right">จ่ายแล้ว</TableCell><TableCell align="right">ยืนยันแล้ว</TableCell><TableCell align="right">คงเหลือ</TableCell><TableCell>สถานะ</TableCell><TableCell>จัดการ</TableCell></TableRow></TableHead>
         <TableBody>{detail.dues.map((due) => <TableRow key={due.id}>
           <TableCell>{due.installment_no === 0 ? 'เงินดาวน์' : due.installment_no}</TableCell><TableCell>{formatDate(due.due_date)}</TableCell>
-          <TableCell align="right"><Money satang={due.amount_satang} /></TableCell><TableCell align="right"><Money satang={due.paid_satang} /></TableCell><TableCell align="right"><Money satang={due.matched_satang} /></TableCell><TableCell align="right"><Money satang={due.outstanding_satang} /></TableCell>
+          <TableCell align="right"><Money satang={due.amount_satang} /></TableCell><TableCell align="right"><Money satang={due.paid_satang} /></TableCell><TableCell align="right"><Money satang={due.outstanding_satang} /></TableCell>
           <TableCell><Chip size="small" variant="outlined" color={due.status === 'overdue' ? 'error' : due.status === 'paid' ? 'success' : 'default'} label={DUE_STATUS[due.status]} />{due.plan_closed && <Typography variant="body2" color="text.secondary">เดือนปิดแล้ว</Typography>}</TableCell>
           <TableCell><Stack direction="row" spacing={0.5}>
             <Button onClick={() => { setFormError(''); setPaying(due); setPayment({ amount: formatBaht(due.outstanding_satang), paid_date: today(), bank_account_id: detail.default_account_id == null ? '' : String(detail.default_account_id) }); }}>การชำระ</Button>
@@ -153,7 +153,6 @@ export default function Installments() {
       <Stack spacing={2}>
         {liveDue && <Typography>ครบกำหนด {formatDate(liveDue.due_date)} · คงเหลือ <Money satang={liveDue.outstanding_satang} /></Typography>}
         {liveDue?.payments.map((p) => <Box key={p.id} sx={{ borderBottom: 1, borderColor: 'divider', pb: 1.5 }}><Typography>{formatDate(p.paid_date)} · <Money satang={p.amount_satang} /> · {PAYMENT_STATUS[p.status]}</Typography><Stack direction="row" spacing={1}>
-          {p.status === 'needs_review' && <Button onClick={() => { setPaying(null); setReviewing(p); }}>เลือกคู่ Statement</Button>}
           {p.status !== 'cancelled' && <Button color="error" disabled={busy || liveDue.plan_closed} onClick={() => { setPaying(null); setFormError(''); setConfirmation({ title: 'ยกเลิกการชำระ', description: 'ยอดชำระนี้จะถูกนำออกจากยอดจ่ายแล้ว และคืนเป็นยอดคงเหลือ', action: () => patch(`/api/monthly-item-payments/${p.id}`, { status: 'cancelled' }) }); }}>ยกเลิกการชำระ</Button>}
         </Stack></Box>)}
         {liveDue && liveDue.outstanding_satang > 0 && detail?.status === 'active' && liveDue.status !== 'skipped' && !liveDue.plan_closed && <Stack component="form" spacing={2} onSubmit={(e) => { e.preventDefault(); void run(async () => post(`/api/installment-dues/${liveDue.id}/payments`, { amount_satang: readAmount(payment.amount), paid_date: payment.paid_date, bank_account_id: Number(payment.bank_account_id) })); }}>

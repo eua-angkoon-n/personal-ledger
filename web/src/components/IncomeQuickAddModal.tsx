@@ -6,12 +6,15 @@ import { formatBaht, parseBahtToSatang } from '../format.js';
 import Money from './Money.js';
 
 // สร้าง/แก้ไข "รายได้เต็ม" (income_record) ได้จากทุกที่ที่ผู้ใช้อยู่ ไม่ต้องข้ามไปหน้าวางแผน:
-//   - จากธุรกรรม (txn) — ยอด/บัญชี/วันที่ prefill มาให้ และผูกกับเงินเข้าก้อนนั้นตรง ๆ (กันบันทึกซ้ำ)
+//   - จากธุรกรรม (txn) — ยอด/บัญชี/วันที่ prefill มาให้เฉย ๆ ไม่ได้สร้างสายผูกกับเงินเข้าก้อนนั้น
 //   - กรอกเอง — สำหรับรายได้ที่ไม่มีเงินเข้าบัญชีให้จับคู่ เช่น เงินสด
 //   - แก้ไขของเดิม (incomeRecordId) — เผื่อใส่ยอดก่อนหักผิด
 //
 // ยอดเต็มคือยอดก่อนหัก ธนาคารเห็นแค่ยอดหลังหัก (ADR-0002 ข้อ 5) จึงต้องให้ผู้ใช้ยืนยันเอง
-// ไม่มี endpoint ใหม่: ใช้ POST/PATCH /api/income-records เดิม ซึ่งเรียก reconcileIncome ท้ายสุดอยู่แล้ว
+// ไม่มี endpoint ใหม่: ใช้ POST/PATCH /api/income-records เดิม
+//
+// กดซ้ำจากเงินเข้าก้อนเดิมได้หลายครั้ง ไม่มีอะไรกัน — รายได้ไม่ผูกกับ statement แล้ว ตรวจซ้ำเองจาก
+// ตาราง "รายได้และรายการหัก" หรือ drill-down รายตัวในหน้าภาษี
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -81,7 +84,6 @@ export default function IncomeQuickAddModal({ open, onClose, onSaved, txn, incom
   const ssSatang = amountOrNull(socialSecurity);
   const whSatang = amountOrNull(withholding);
   const netSatang = grossSatang == null || ssSatang == null || whSatang == null ? null : grossSatang - ssSatang - whSatang;
-  const matchesDeposit = txn == null || netSatang === txn.amount_satang;
 
   const save = async () => {
     if (grossSatang == null || ssSatang == null || whSatang == null || netSatang == null) {
@@ -120,11 +122,7 @@ export default function IncomeQuickAddModal({ open, onClose, onSaved, txn, incom
           gross_amount_satang: grossSatang,
           bank_account_id: accountId === '' ? null : Number(accountId),
           income_date: incomeDate,
-          // ไม่มีบัญชีก็ไม่มีอะไรให้จับคู่ — ปิด auto_match ไม่งั้นค้างสถานะ "รอ statement" ตลอดไป
-          auto_match: accountId !== '',
           deductions,
-          // ผูกกับเงินเข้าก้อนที่ผู้ใช้กดมาโดยตรง — ฝั่ง API ใช้ตัวนี้กันบันทึกธุรกรรมเดิมซ้ำด้วย
-          ...(txn ? { source_txn_id: txn.id } : {}),
         });
       }
       onSaved();
@@ -143,7 +141,7 @@ export default function IncomeQuickAddModal({ open, onClose, onSaved, txn, incom
       <Stack component="form" spacing={2} onSubmit={(e) => { e.preventDefault(); void save(); }}>
         <Typography variant="body2" color="text.secondary">
           ภาษีต้องใช้ยอด "ก่อนหัก" — ถ้าสลิปเงินเดือนมีหักประกันสังคม/ภาษี ณ ที่จ่าย ให้กรอกเพิ่มด้วย
-          {txn && <> ระบบจะจับคู่กับเงินเข้ารายการนี้ (<Money satang={txn.amount_satang} />) ให้เอง</>}
+          {txn && <> ยอดที่เข้าบัญชีจริงคือ <Money satang={txn.amount_satang} /> ซึ่งเป็นยอดหลังหักแล้ว</>}
         </Typography>
         <TextField label="ชื่อรายได้" required value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น เงินเดือน" disabled={loading} />
         <TextField
@@ -160,7 +158,7 @@ export default function IncomeQuickAddModal({ open, onClose, onSaved, txn, incom
         {txn == null && !editing && (
           <TextField
             select label="บัญชีรับเงิน (ไม่บังคับ)" value={accountId} onChange={(e) => setAccountId(e.target.value)}
-            helperText="เลือกบัญชีไว้ ระบบจะจับคู่กับเงินเข้าจริงให้เองเมื่อยอดตรงกัน"
+            helperText="ไว้อ้างอิงว่าเงินเข้าบัญชีไหน"
           >
             <MenuItem value="">ไม่ระบุ (เช่น เงินสด)</MenuItem>
             {accounts.map((a) => <MenuItem key={a.id} value={String(a.id)}>{a.nickname}</MenuItem>)}
@@ -178,14 +176,8 @@ export default function IncomeQuickAddModal({ open, onClose, onSaved, txn, incom
         />
         {netSatang != null && (
           <Typography aria-live="polite">
-            เงินเข้าสุทธิที่คาดไว้: <Money satang={netSatang} tone={netSatang < 0 ? 'expense' : 'income'} />
+            ยอดสุทธิหลังหัก: <Money satang={netSatang} tone={netSatang < 0 ? 'expense' : 'income'} />
           </Typography>
-        )}
-        {txn != null && netSatang != null && !matchesDeposit && (
-          <Alert severity="warning">
-            ยอดสุทธิไม่ตรงกับเงินที่เข้าบัญชีจริง — บันทึกได้ แต่จะแสดงว่ายังได้รับไม่ครบ
-            (ยอดเต็ม − รายการหัก ควรเท่ากับ <Money satang={txn.amount_satang} />)
-          </Alert>
         )}
         {error && <Alert severity="error">{error}</Alert>}
         <Button type="submit" variant="contained" disabled={busy || loading} aria-busy={busy}>

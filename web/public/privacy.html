@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>นโยบายความเป็นส่วนตัว — Hyacinthia Ledger</title>
+<style>
+:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.75;max-width:44rem;margin:0 auto;padding:3rem 1.25rem 5rem}
+h1{font-size:1.7rem;margin:0 0 .25rem}
+h2{font-size:1.1rem;margin:2.25rem 0 .5rem}
+h3{font-size:1rem;margin:1.5rem 0 .35rem}
+p,ul{margin:.75rem 0}
+li{margin:.35rem 0}
+.meta{opacity:.7;font-size:.9rem;margin-top:0}
+.en{opacity:.9}
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid #8883;font-size:.9rem}
+footer a{margin-right:1rem}
+</style>
+</head>
+<body>
+<h1>นโยบายความเป็นส่วนตัว</h1>
+<p class="meta">Hyacinthia Ledger (<a href="https://ledger.tapestopnight.com/home.html">ledger.tapestopnight.com</a>) · ปรับปรุงล่าสุด 8 กันยายน 2569 (2026-09-08)</p>
+
+<h2>1. ผู้ให้บริการและขอบเขต</h2>
+<p>Hyacinthia Ledger เป็นระบบบัญชีรายรับ–รายจ่ายที่ใช้งานภายในครอบครัว ดูแลและติดตั้งด้วยตนเอง (self-hosted) บนเซิร์ฟเวอร์ที่ผู้ดูแลระบบเป็นผู้ควบคุมเอง ไม่ใช่บริการเชิงพาณิชย์และไม่เปิดให้บุคคลทั่วไปสมัครใช้งาน นโยบายนี้ครอบคลุมข้อมูลทั้งหมดที่ระบบเก็บผ่านเว็บ <code>ledger.tapestopnight.com</code></p>
+
+<h2>2. ข้อมูลที่เก็บ</h2>
+<h3>2.1 ข้อมูลจากบัญชี Google</h3>
+<ul>
+  <li><strong>ข้อมูลระบุตัวตน</strong> (scope <code>openid</code>, <code>email</code>, <code>profile</code>) — อีเมล ชื่อที่แสดง และรหัสผู้ใช้ของ Google ใช้เพื่อยืนยันตัวตนตอนเข้าสู่ระบบและผูกข้อมูลกับเจ้าของบัญชี</li>
+  <li><strong>เนื้อหาอีเมลแบบอ่านอย่างเดียว</strong> (scope <code>gmail.readonly</code>) — ระบบค้นเฉพาะอีเมลที่เป็น statement จากธนาคาร และอ่านไฟล์ PDF ที่แนบมาเพื่อแกะออกเป็นรายการเดินบัญชี ระบบ<strong>ไม่</strong>อ่านอีเมลอื่นที่ไม่เข้าเงื่อนไขการค้น และ<strong>ไม่</strong>ส่ง ไม่แก้ไข ไม่ลบ ไม่ติดป้ายอีเมลใด ๆ</li>
+  <li><strong>refresh token</strong> ของ Google — เก็บไว้เพื่อให้ระบบดึง statement ใหม่ได้เองเป็นระยะโดยไม่ต้องให้ผู้ใช้ล็อกอินซ้ำทุกครั้ง</li>
+</ul>
+<h3>2.2 ข้อมูลที่เกิดจากการใช้งาน</h3>
+<ul>
+  <li>รายการเดินบัญชีที่แกะได้จาก statement — วันที่ จำนวนเงิน คำบรรยายรายการ ยอดคงเหลือ และเลขบัญชีบางส่วนตามที่ปรากฏใน statement</li>
+  <li>ไฟล์ statement PDF ต้นฉบับ และเอกสารประกอบที่ผู้ใช้อัปโหลดเอง เช่น สลิปหรือใบเสร็จ</li>
+  <li>หมวดหมู่ หมายเหตุ และการตั้งค่าที่ผู้ใช้กรอกเอง</li>
+</ul>
+<p>ระบบไม่เก็บรหัสผ่านของธนาคารเพื่อเข้าใช้ระบบธนาคาร ไม่เชื่อมต่อกับระบบธนาคารโดยตรง และไม่ทำธุรกรรมทางการเงินใด ๆ</p>
+
+<h2>3. วัตถุประสงค์ในการใช้ข้อมูล</h2>
+<p>ข้อมูลทั้งหมดใช้เพื่อให้ฟังก์ชันของแอปทำงานเท่านั้น คือ นำเข้า statement จัดหมวดหมู่รายการ แยกการโอนระหว่างบัญชีของผู้ใช้เอง และแสดงรายงานสรุปให้สมาชิกในครอบครัว ระบบ<strong>ไม่</strong>ใช้ข้อมูลเพื่อการโฆษณา ไม่ขาย ไม่ให้เช่า ไม่แลกเปลี่ยนข้อมูลกับบุคคลที่สาม และ<strong>ไม่</strong>นำข้อมูลจาก Google ไปฝึกโมเดลปัญญาประดิษฐ์หรือโมเดลภาษาใด ๆ</p>
+
+<h2>4. การเปิดเผยข้อมูล</h2>
+<p>ข้อมูลจะไม่ถูกเปิดเผยต่อบุคคลภายนอก ยกเว้นกรณีที่กฎหมายบังคับ ระบบไม่ใช้บริการวิเคราะห์พฤติกรรมผู้ใช้ ไม่ฝังสคริปต์ติดตามจากผู้ให้บริการอื่น และไม่ส่งข้อมูลผู้ใช้ออกไปยังบริการภายนอกใด นอกจากการเรียก Google API เพื่อยืนยันตัวตนและดึง statement ตามที่อธิบายไว้ข้างต้น ภายในครอบครัว รายงานสรุปจะเห็นได้ระหว่างสมาชิกที่ผู้ดูแลระบบอนุมัติแล้ว ตามการตั้งค่าสิทธิ์ของแต่ละคน</p>
+
+<h2>5. การเก็บรักษาและความปลอดภัย</h2>
+<ul>
+  <li>ข้อมูลอยู่บนเซิร์ฟเวอร์ส่วนตัวที่ผู้ดูแลระบบควบคุมเอง เข้าถึงเว็บผ่าน HTTPS เท่านั้น</li>
+  <li>refresh token ของ Google และรหัสผ่านของไฟล์ PDF ถูก<strong>เข้ารหัส</strong>ก่อนบันทึกลงฐานข้อมูล</li>
+  <li>ไฟล์ statement ต้นฉบับถูกเก็บในรูปแบบที่ยังเข้ารหัสอยู่ ไฟล์ที่ถอดรหัสแล้วไม่ถูกเขียนลงดิสก์</li>
+  <li>ฐานข้อมูลไม่เปิดพอร์ตออกสู่อินเทอร์เน็ต และผู้ใช้ใหม่ต้องได้รับอนุมัติจากผู้ดูแลระบบก่อนเข้าใช้งาน</li>
+  <li>ข้อมูลสำรองถูกเข้ารหัสก่อนนำออกไปเก็บนอกเครื่อง</li>
+</ul>
+
+<h2>6. ระยะเวลาเก็บข้อมูล</h2>
+<p>รายการเดินบัญชีและเอกสารถูกเก็บไว้ต่อเนื่องเพื่อให้ดูประวัติย้อนหลังได้ตามวัตถุประสงค์ของการทำบัญชี จนกว่าผู้ใช้จะร้องขอให้ลบ เมื่อผู้ใช้ถอนสิทธิ์การเข้าถึงบัญชี Google ระบบจะหยุดดึงข้อมูลใหม่ทันที และ refresh token ที่เก็บไว้จะใช้งานไม่ได้อีก</p>
+
+<h2>7. สิทธิของผู้ใช้ และการถอนสิทธิ์ / ลบข้อมูล</h2>
+<ul>
+  <li><strong>ถอนสิทธิ์การเข้าถึง Google</strong> ได้เองทุกเมื่อที่ <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> โดยเลือก Hyacinthia Ledger แล้วกดเพิกถอนสิทธิ์</li>
+  <li><strong>ขอดู แก้ไข หรือลบข้อมูล</strong> ของตนทั้งหมด รวมถึงรายการ เอกสาร และบัญชีผู้ใช้ ได้โดยส่งอีเมลมาที่ที่อยู่ท้ายหน้านี้ ระบบจะดำเนินการภายใน 30 วัน</li>
+</ul>
+
+<h2>8. การเปลี่ยนแปลงนโยบาย</h2>
+<p>หากมีการแก้ไขนโยบายนี้ วันที่ปรับปรุงล่าสุดด้านบนจะถูกอัปเดต และผู้ใช้จะได้รับแจ้งทางอีเมลหากเป็นการเปลี่ยนแปลงที่มีนัยสำคัญ</p>
+
+<h2>9. Google API Services — Limited Use (English)</h2>
+<p class="en">Hyacinthia Ledger's use and transfer of information received from Google APIs to any other app will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+<h2>10. Privacy Policy summary (English)</h2>
+<div class="en">
+<p><strong>Who we are.</strong> Hyacinthia Ledger is a self-hosted, non-commercial personal finance app used by one family. It runs on a private server controlled by its administrator and is not open to public sign-up.</p>
+<p><strong>What Google data we access.</strong> (a) Your basic identity — email address, display name and Google account identifier (<code>openid</code>, <code>email</code>, <code>profile</code>) — used to sign you in. (b) Read-only Gmail content (<code>gmail.readonly</code>): the app searches only for bank-statement emails and reads their PDF attachments in order to extract transaction rows. It does not read unrelated mail, and it never sends, modifies, labels or deletes any message. (c) A Google refresh token, so statements can be imported on a schedule without repeated sign-in.</p>
+<p><strong>Why the <code>gmail.readonly</code> scope is required.</strong> Thai banks deliver monthly account statements exclusively as password-protected PDF attachments sent to the account holder's mailbox. There is no bank API available for this data. Reading those specific emails and their attachments is the only way the app can obtain the transactions it exists to record; no narrower Gmail scope allows reading attachment content.</p>
+<p><strong>How it is used.</strong> Solely to provide the app's user-facing features: importing statements, categorising transactions, matching internal transfers, and showing household reports. We do <strong>not</strong> sell, rent or share this data with third parties, do <strong>not</strong> use it for advertising, and do <strong>not</strong> use Google user data to develop, improve or train generalized AI or machine-learning models. No analytics or third-party tracking scripts are used.</p>
+<p><strong>Storage and security.</strong> Data is stored on a private, administrator-controlled server, served only over HTTPS. Google refresh tokens and PDF passwords are encrypted at rest; original statement files are stored still-encrypted and decrypted copies are never written to disk. The database is not exposed to the internet, and new users require administrator approval. Backups are encrypted before leaving the machine.</p>
+<p><strong>Retention.</strong> Transactions and documents are retained for as long as the ledger history is needed, or until the user asks for deletion. Revoking access stops all further data collection immediately.</p>
+<p><strong>Your choices.</strong> Revoke the app's access at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. To access, correct or delete your data — including your account and all imported transactions and documents — email the address below; requests are handled within 30 days.</p>
+</div>
+
+<h2>11. ติดต่อ / Contact</h2>
+<p>อีเมล: <a href="mailto:euaangkoon.n@gmail.com">euaangkoon.n@gmail.com</a></p>
+
+<footer>
+  <a href="/home.html">หน้าแรก / Home</a>
+  <a href="/terms.html">ข้อกำหนดการใช้บริการ / Terms of Service</a>
+</footer>
+</body>
+</html>
