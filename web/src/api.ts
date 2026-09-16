@@ -245,6 +245,7 @@ export type PlanItem = {
   category_id: number | null;
   category_name: string | null;
   planned_amount_satang: number;
+  amount_mode: 'fixed' | 'estimated';
   due_date: string | null;
   explicit_status: 'active' | 'skipped' | 'cancelled';
   note: string | null;

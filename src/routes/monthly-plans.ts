@@ -68,7 +68,7 @@ function assertDueDateInMonth(dueDate: string | null, monthStart: string): void 
 const ITEMS_SQL = `
   select i.id, i.recurring_rule_id, i.installment_due_id, i.income_record_id, i.kind, i.name,
          i.category_id, c.name as category_name,
-         i.planned_amount_satang, i.due_date, i.explicit_status, i.note,
+         i.planned_amount_satang, i.amount_mode, i.due_date, i.explicit_status, i.note,
          pay.paid_satang, pay.matched_satang, pay.needs_review_count,
          ${PAYMENT_STATE_SQL} as payment_state,
          coalesce(pmts.payments, '[]'::json) as payments
