@@ -614,14 +614,26 @@ export default function MonthlyPlan() {
                           </TableCell>
                           <TableCell align="right">
                             <Stack direction="row" spacing={0.5} sx={{ justifyContent: 'flex-end' }}>
-                              <Button
-                                size="small"
-                                startIcon={<PaidRounded />}
-                                disabled={closed || inactive || item.income_record_id != null || item.installment_due_id != null}
-                                onClick={() => openPayment(item)}
-                              >
-                                จ่ายแล้ว
-                              </Button>
+                              {/* "จ่ายแล้ว" เป็นปุ่มของรายจ่าย/เงินกันไว้เท่านั้น — เงินเข้าต้องบันทึกที่
+                                  "รายได้และรายการหัก" เพื่อแยกยอดเต็มออกจากยอดสุทธิ (ADR-0002 ข้อ 5)
+                                  เดิมปุ่มนี้กดบนรายการรายได้ได้ แล้วประกาศจ่ายยอดสุทธิที่เข้าบัญชีจริง
+                                  (26,125) ไปเทียบกับยอดเต็มตามแผน (27,000) → ค้าง "จ่ายบางส่วน"
+                                  รายการหักจากเงินเดือนไม่มีปุ่มอะไรเลย เงินไม่ได้ออกจากบัญชีเรา
+                                  มันขึ้น "หักจากรายได้" เองเมื่อถูกผูกจากฟอร์มรายได้ */}
+                              {item.kind === 'income' && item.income_record_id == null ? (
+                                <Button size="small" startIcon={<PaidRounded />} href="#income-heading" disabled={closed || inactive}>
+                                  บันทึกรายได้เต็ม
+                                </Button>
+                              ) : item.kind === 'payroll_deduction' && item.income_record_id == null ? null : (
+                                <Button
+                                  size="small"
+                                  startIcon={<PaidRounded />}
+                                  disabled={closed || inactive || item.income_record_id != null || item.installment_due_id != null}
+                                  onClick={() => openPayment(item)}
+                                >
+                                  จ่ายแล้ว
+                                </Button>
+                              )}
                               <Button
                                 size="small"
                                 startIcon={<EditRounded />}
