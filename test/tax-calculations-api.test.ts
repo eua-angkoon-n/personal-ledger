@@ -377,17 +377,18 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
   });
 
   // กดปุ่ม "บันทึกเป็นรายได้เต็ม" ซ้ำบนธุรกรรมเดิม ต้องไม่ได้รายได้สองก้อนจากเงินเข้าก้อนเดียว
-  await t.test('บันทึกธุรกรรมเดิมเป็นรายได้ซ้ำไม่ได้ — เงินเข้าก้อนเดียวต้องนับครั้งเดียว', async () => {
-    const salaryTxn = await insertTxn(3000000, 'credit', '2026-11-28');
+  // รายได้ไม่ผูกกับธุรกรรมแล้ว การกดบันทึกซ้ำจากเงินเข้าก้อนเดิมจึงนับซ้ำจริง — ตั้งใจให้เป็นแบบนั้น
+  // (ยอดตามแผนกับยอดใน statement ไม่ตรงกันเป็นเรื่องปกติ การบังคับให้ผูกกันทำให้บันทึกไม่ได้เลย)
+  // ตัวกันคือผู้ใช้เห็นรายการซ้ำเองในตารางรายได้และ drill-down รายตัวในหน้าภาษี
+  await t.test('บันทึกเงินเข้าก้อนเดิมสองครั้งได้ และเงินได้ทั้งปีนับสองก้อนตามที่บันทึก', async () => {
+    await insertTxn(3000000, 'credit', '2026-11-28');
     const body = {
       month: '2026-11',
       name: 'เงินเดือน พ.ย.',
       gross_amount_satang: 3000000,
       bank_account_id: bankAccountId,
       income_date: '2026-11-28',
-      auto_match: true,
       deductions: [],
-      source_txn_id: salaryTxn,
     };
 
     const first = await app.request('/api/income-records', {
@@ -400,18 +401,14 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
     const second = await app.request('/api/income-records', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
-    assert.equal(second.status, 409, 'กดซ้ำต้องถูกปฏิเสธ ไม่ใช่สร้างรายได้ก้อนที่สอง');
+    assert.equal(second.status, 201);
 
     const afterSecond = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
     assert.equal(
       afterSecond.inputs.employmentIncomeSatang,
-      beforeSecond.inputs.employmentIncomeSatang,
-      'ยอดเงินได้ต้องไม่เพิ่มจากการกดซ้ำ',
+      beforeSecond.inputs.employmentIncomeSatang + 3000000,
+      'บันทึกสองก้อนต้องนับสองก้อน ไม่มีตัวกันซ้ำแล้ว',
     );
-
-    // ธุรกรรมที่บันทึกไปแล้วต้องบอกได้ว่าผูกกับรายได้ไหน (หน้าเว็บจะได้ซ่อนปุ่มแทนที่จะให้กดแล้ว error)
-    const detail = (await (await app.request(`/api/transactions/${salaryTxn}`)).json()) as any;
-    assert.ok(detail.income_record_id != null, 'GET /transactions/:id ต้องบอกว่าธุรกรรมนี้เป็นรายได้แล้ว');
   });
 
   // เกณฑ์ต้องแคบพอ: บนข้อมูลจริงถ้าเสนอ "ทุกเงินเข้าที่ยังไม่มี income_record" จะได้ 53 รายการ
@@ -466,15 +463,11 @@ test('tax calculation: summary, snapshot, deduction claims, export, audit', asyn
        values ($1, $2, $3, 'เงินเดือน ม.ค.', 4000000, 4000000, $4, '2026-01-31')`,
       [userA, plan, item, bankAccountId],
     );
-    await db.pool.query(
-      `insert into monthly_item_payment (monthly_plan_item_id, amount_satang, paid_date, bank_account_id, txn_id, status, verified_at)
-       values ($1, 4000000, '2026-01-31', $2, $3, 'matched', now())`,
-      [item, bankAccountId, payroll[0]],
-    );
-
+    // ไม่มีสายผูก txn → income_record แล้ว ข้อเสนอแนะจึงยังโชว์เงินเข้าที่บันทึกไปแล้วอยู่
+    // (ผู้ใช้ข้ามเองได้ — ยอมแลกกับการที่แผนไม่ต้องผูกยอดให้ตรงกับ statement)
     const done = (await (await app.request(`/api/tax/2026/summary?tax_entity_id=${entityA}`)).json()) as any;
     const doneIds = done.unrecorded_income_txns.map((r: { id: number }) => r.id);
-    assert.ok(!doneIds.includes(payroll[0]), 'บันทึกเป็นรายได้แล้วต้องเลิกเสนอ');
+    assert.ok(doneIds.includes(payroll[0]), 'เงินเดือนที่เข้าสม่ำเสมอต้องยังถูกเสนอ');
     assert.equal(done.inputs.employmentIncomeSatang - employmentBefore, 4000000, 'ยอดต้องเข้าเงินได้จากงานประจำ');
 
     for (const id of [oneOff, ...erratic]) {

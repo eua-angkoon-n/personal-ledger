@@ -236,7 +236,7 @@ export default function Dashboard() {
                 icon={<PaidRounded fontSize="small" />}
                 value={
                   <>
-                    {(plan?.payment_status.verified_count ?? 0) + (plan?.payment_status.declared_count ?? 0)}
+                    {plan?.payment_status.paid_count ?? 0}
                     <Box component="span" sx={{ color: 'text.secondary', fontSize: '1rem' }}>
                       {` / ${plan?.payment_status.total_count ?? 0} รายการ`}
                     </Box>
@@ -245,7 +245,7 @@ export default function Dashboard() {
                 caption={
                   plan == null
                     ? undefined
-                    : `เกินกำหนด ${plan.payment_status.overdue_count} · จ่ายบางส่วน ${plan.payment_status.partial_count} · รอ statement ${plan.payment_status.declared_count}`
+                    : `เกินกำหนด ${plan.payment_status.overdue_count} · จ่ายบางส่วน ${plan.payment_status.partial_count} · ยังไม่จ่าย ${plan.payment_status.unpaid_count}`
                 }
                 disabled={plan == null || plan.payment_status.total_count === 0}
                 disabledReason="ยังไม่มีรายการที่ต้องจ่ายในเดือนนี้"

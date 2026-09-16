@@ -138,8 +138,6 @@ export type TxnDetail = {
   annotation_note: string | null;
   tax_entity_id: number | null;
   tax_treatment: TaxTreatment | null;
-  // ไม่ null = ธุรกรรมนี้ถูกบันทึกเป็น "รายได้เต็ม" ไปแล้ว (กันกดบันทึกซ้ำจนรายได้นับสองรอบ)
-  income_record_id: number | null;
   statement_id: number;
   period_start: string | null;
   period_end: string | null;
@@ -221,8 +219,8 @@ export type AccountBalances = { from: string; to: string; rows: AccountBalanceRo
 export type DataCoverage = { rows: AccountCoverage[]; data_coverage_note: string };
 
 export type PlanKind = 'income' | 'payroll_deduction' | 'expense' | 'reserve';
-export type PaymentState = 'unpaid' | 'overdue' | 'partial' | 'declared' | 'verified' | 'skipped' | 'cancelled' | 'deducted' | 'not_required';
-export type PaymentRowStatus = 'declared' | 'matched' | 'needs_review' | 'cancelled';
+export type PaymentState = 'unpaid' | 'overdue' | 'partial' | 'paid' | 'received' | 'skipped' | 'cancelled' | 'deducted' | 'not_required';
+export type PaymentRowStatus = 'declared' | 'cancelled';
 
 export type PlanItemPayment = {
   id: number;
@@ -230,9 +228,7 @@ export type PlanItemPayment = {
   paid_date: string;
   bank_account_id: number;
   account_nickname: string;
-  txn_id: number | null;
   status: PaymentRowStatus;
-  verified_at: string | null;
 };
 
 export type PlanItem = {
@@ -250,8 +246,6 @@ export type PlanItem = {
   explicit_status: 'active' | 'skipped' | 'cancelled';
   note: string | null;
   paid_satang: number;
-  matched_satang: number;
-  needs_review_count: number;
   payment_state: PaymentState;
   payments: PlanItemPayment[];
 };
@@ -271,22 +265,11 @@ export type IncomeRecord = {
   expected_net_satang: number;
   bank_account_id: number | null;
   income_date: string | null;
-  auto_match: boolean;
-  deposit_txn_id: number | null;
-  match_status: 'pending' | 'needs_review' | 'matched' | 'not_required';
   deductions: IncomeDeduction[];
-};
-export type IncomeCandidate = {
-  id: number;
-  txn_date: string;
-  description: string;
-  amount_satang: number;
-  account_nickname: string;
 };
 export type InstallmentTotals = {
   total_payable_satang: number;
   paid_satang: number;
-  matched_satang: number;
   outstanding_satang: number;
 };
 export type InstallmentPlan = InstallmentTotals & {
@@ -312,7 +295,6 @@ export type InstallmentDue = {
   due_date: string;
   amount_satang: number;
   paid_satang: number;
-  matched_satang: number;
   outstanding_satang: number;
   status: 'planned' | 'partially_paid' | 'paid' | 'overdue' | 'skipped' | 'cancelled';
   monthly_plan_item_id: number | null;
@@ -336,9 +318,7 @@ export type PaymentStatusSummary = {
   unpaid_count: number;
   overdue_count: number;
   partial_count: number;
-  declared_count: number;
-  verified_count: number;
-  needs_review_count: number;
+  paid_count: number;
 };
 
 export type MonthlyPlan = {

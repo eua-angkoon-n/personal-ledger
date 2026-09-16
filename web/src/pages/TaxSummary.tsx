@@ -86,7 +86,7 @@ export default function TaxSummary() {
   // ระบบเจอเงินเข้าที่น่าจะเป็นรายได้ประจำให้แล้ว แต่ต้องติ๊กยืนยันเป็นรายการก่อนเสมอ —
   // heuristic ผิดได้ และรายได้ปลอมในฐานแก้ยากกว่าการกดเพิ่มเอง (ข้อมูลจริงมีเงินโอนจากญาติ/ฝากเงินสดปนอยู่เยอะ)
   // ยอดก่อนหัก default = ยอดที่เข้าบัญชีจริง (แก้ทีหลังได้ที่หน้าวางแผนถ้าสลิปมีรายการหัก)
-  // ยิง POST /api/income-records เดิมทีละรายการ ซึ่ง reconcileIncome ให้ท้ายสุดอยู่แล้ว จึงจับคู่เองทันที
+  // ยิง POST /api/income-records เดิมทีละรายการ — บันทึกเป็นรายได้เต็ม ไม่ผูกกับธุรกรรมต้นทาง
   const recordSelectedIncome = async () => {
     if (!summary) return;
     const chosen = summary.unrecorded_income_txns.filter((t) => !unchecked.includes(t.id));

@@ -53,7 +53,7 @@ export async function installmentDetail(
   const { rows: dues } = await db.query(
     `select d.id,d.installment_no,d.due_date,d.amount_satang,i.id as monthly_plan_item_id,
     coalesce(mp.status='closed',false) as plan_closed,
-    coalesce(pay.paid_satang,0)::bigint as paid_satang,coalesce(pay.matched_satang,0)::bigint as matched_satang,
+    coalesce(pay.paid_satang,0)::bigint as paid_satang,
     (d.amount_satang-coalesce(pay.paid_satang,0))::bigint as outstanding_satang,
     case when $2='cancelled' then 'cancelled' when d.explicit_status='skipped' then 'skipped'
       when coalesce(pay.paid_satang,0)>=d.amount_satang then 'paid'
@@ -63,22 +63,19 @@ export async function installmentDetail(
     from installment_due d left join monthly_plan_item i on i.installment_due_id=d.id
     left join monthly_plan mp on mp.user_id=$3 and mp.month_start=date_trunc('month',d.due_date)::date
     left join lateral(select sum(p.amount_satang) filter(where p.status<>'cancelled') as paid_satang,
-      sum(p.amount_satang) filter(where p.status='matched') as matched_satang,
       json_agg(json_build_object('id',p.id,'amount_satang',p.amount_satang,'paid_date',p.paid_date,'bank_account_id',p.bank_account_id,
-      'account_nickname',a.nickname,'txn_id',p.txn_id,'status',p.status,'verified_at',p.verified_at) order by p.id) as payments
+      'account_nickname',a.nickname,'status',p.status) order by p.id) as payments
       from monthly_item_payment p join bank_account a on a.id=p.bank_account_id and a.user_id=$3 where p.monthly_plan_item_id=i.id) pay on true
     where d.installment_plan_id=$1 order by d.installment_no`,
     [planId, plan.status, userId],
   );
-  const paid = dues.reduce((s, d) => s + d.paid_satang, 0),
-    matched = dues.reduce((s, d) => s + d.matched_satang, 0);
+  const paid = dues.reduce((s, d) => s + d.paid_satang, 0);
   const total =
     plan.total_amount_satang + plan.interest_satang + plan.fee_satang;
   return {
     ...plan,
     total_payable_satang: total,
     paid_satang: paid,
-    matched_satang: matched,
     outstanding_satang: total - paid,
     status:
       plan.status === "cancelled"

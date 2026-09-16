@@ -22,8 +22,6 @@ import {
 } from './gmail.js';
 import { parsers } from './parsers/index.js';
 import type { ParsedStatement } from './parsers/types.js';
-import { reconcilePayments } from './services/payment-reconciliation.js';
-import { reconcileIncome } from './services/income-records.js';
 import { reconcileTransfers } from './services/transfer-matching.js';
 
 type Bank = {
@@ -121,14 +119,8 @@ async function doSync(emailAccountId: number, requestFull: boolean): Promise<Syn
     console.error(`[worker] mailbox=${emailAccountId} reconcileTransfers ล้มเหลว:`, e);
   }
 
-  // §9.5: statement มาถึงแล้วจึงหา candidate ให้ Payment Declaration ที่ยังรออยู่ — idempotent
-  // เหมือนกัน และแยก try/catch ของตัวเอง ไม่ให้ความล้มเหลวของอันหนึ่งกินอีกอันหรือล้ม sync ทั้งรอบ
-  try {
-    await reconcilePayments(pool, account.user_id);
-    await tx(c => reconcileIncome(c, account.user_id));
-  } catch (e) {
-    console.error(`[worker] mailbox=${emailAccountId} reconcilePayments ล้มเหลว:`, e);
-  }
+  // ไม่มีขั้น reconcile แผนกับ statement อีกแล้ว — statement เข้ามาแล้วจบที่ txn เท่านั้น
+  // การจ่าย/การรับเงินในแผนเป็นสิ่งที่ผู้ใช้บันทึกเอง ไม่มีอะไรต้องไล่จับคู่ตามหลัง
 
   return summary;
 }
