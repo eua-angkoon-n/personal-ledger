@@ -281,7 +281,34 @@ monthlyPlansRouter.patch('/monthly-plan-items/:id', requireUser(async (req, res,
   res.json(updated);
 }));
 
-// skip โดยไม่ลบประวัติ (§9.3) — แถวต้องคงอยู่ ไม่งั้น generateMonthlyItems จะ insert กลับมาใหม่ทุกครั้ง
+/**
+ * ลบทิ้งจริง (§9.3) — ต่างจาก `skip` ที่เก็บแถวไว้เป็นประวัติแต่ไม่นับยอด ใช้เก็บกวาดแถวที่ไม่ควรมี
+ * ตั้งแต่แรก เช่น รายการค้างจากการแก้ `anchor_day` ของกฎ ซึ่งเดิมผู้ใช้เอาออกจากหน้าจอไม่ได้เลย
+ *
+ * generateMonthlyItems ข้ามกฎที่มีแถวอยู่ในเดือนนั้นแล้ว ลบแถวเดียวจึงไม่ถูก insert กลับมา
+ * ลบของกฎเดียวกันออก**หมดทั้งเดือน**ต่างหากที่จะกางใหม่ตามกฎปัจจุบันตอน GET รอบถัดไป
+ * ซึ่งเป็นท่าที่ตั้งใจให้ใช้ "รีเซ็ตเดือนนี้ให้ตรงกับกฎที่เพิ่งแก้"
+ *
+ * monthly_item_payment ผูก `on delete cascade` — มีประกาศจ่ายที่ยังไม่ยกเลิกห้ามลบ ไม่งั้นประวัติ
+ * การจ่ายและการจับคู่ statement หายเงียบ ๆ ให้ยกเลิกการจ่ายก่อน หรือใช้ `skip` แทน
+ */
+monthlyPlansRouter.delete('/monthly-plan-items/:id', requireUser(async (req, res, user) => {
+  const itemId = pathId(req);
+  await tx(async (c) => {
+    const item = await loadOwnedItem(c, user.id, itemId, { requireOpen: true });
+    if (item.income_record_id != null || item.installment_due_id != null) throw new HttpError(409, 'จัดการรายการนี้ผ่านหน้ารายได้หรือแผนผ่อน');
+    const { rows: pay } = await c.query<{ n: string }>(
+      `select count(*) as n from monthly_item_payment where monthly_plan_item_id = $1 and status <> 'cancelled'`,
+      [itemId],
+    );
+    if (Number(pay[0]!.n) > 0) throw new HttpError(409, 'รายการนี้มีการประกาศจ่ายอยู่ ยกเลิกการจ่ายก่อน หรือใช้ "ข้าม" แทน');
+    const before = (await c.query('delete from monthly_plan_item where id = $1 returning *', [itemId])).rows[0];
+    await audit(c, { userId: user.id, action: 'monthly_plan_item.delete', entityType: 'monthly_plan_item', entityId: itemId, before, ip: req.ip ?? null });
+  });
+  res.status(204).end();
+}));
+
+// skip โดยไม่ลบประวัติ (§9.3) — เก็บแถวไว้ให้เห็นว่าเดือนนี้ตั้งใจไม่จ่าย ต่างจาก DELETE ด้านบนที่เอาออกเลย
 monthlyPlansRouter.post('/monthly-plan-items/:id/skip', requireUser(async (req, res, user) => {
   const itemId = pathId(req);
   const updated = await tx(async (c) => {
