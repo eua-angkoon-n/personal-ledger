@@ -17,14 +17,22 @@ import { taxDocumentsRouter } from './routes/tax-documents.js';
 import { taxEntitiesRouter } from './routes/tax-entities.js';
 import { transactionsRouter } from './routes/transactions.js';
 import { transferMatchesRouter } from './routes/transfer-matches.js';
+import { APP_VERSION } from './version.js';
 
 export { HttpError } from './http.js';
 
 export const api = Router();
 
+// /me เป็น endpoint เดียวที่เว็บเรียกก่อนรู้ว่าล็อกอินหรือยัง — ส่ง version มาด้วยตรงนี้จึงได้เลข
+// เวอร์ชันบนหน้าเข้าสู่ระบบด้วย ไม่ต้องมี `define` ของ vite (เว็บ import จาก src/ ไม่ได้ root คนละที่)
+//
+// ponytail: /me ไม่ต้องล็อกอิน → `version` จึงอ่านได้จากภายนอกโดยไม่มี session (fingerprinting)
+// รับความเสี่ยงนี้เพราะเจ้าของงานเลือก "แสดงมุมล่างขวาทุกหน้า" รวมหน้าเข้าสู่ระบบ และเลขเป็น semver
+// เปล่า ๆ ไม่มี git sha ไม่ผูกกับ CVE ของใคร ถ้าวันไหนอยากปิด: `...(user ? { version: APP_VERSION } : {})`
+// (ผลตามมา: badge หายจากหน้าเข้าสู่ระบบและหน้ารอโหลด แต่ยังอยู่ครบทุกหน้าหลังล็อกอิน)
 api.get('/me', async (req, res, next) => {
   try {
-    res.json({ user: await loadUser(req) });
+    res.json({ user: await loadUser(req), version: APP_VERSION });
   } catch (e) {
     next(e);
   }

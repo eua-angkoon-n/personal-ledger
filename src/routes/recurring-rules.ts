@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { requireUser } from '../auth.js';
-import { pool, query } from '../db.js';
+import { pool, query, tx } from '../db.js';
 import { enumStr, HttpError, id, isoDate, pathId, satang, str, type Body } from '../http.js';
+import { audit } from '../services/audit.js';
 import { assertOwnedRefs } from '../services/plan-query.js';
 
 export const recurringRulesRouter = Router();
@@ -44,28 +45,33 @@ recurringRulesRouter.post('/recurring-rules', requireUser(async (req, res, user)
   const categoryId = b.category_id == null || b.category_id === '' ? null : id(b, 'category_id');
   await assertOwnedRefs(pool, user.id, { bankAccountId: defaultAccountId, categoryId });
 
-  const { rows } = await query(
-    `insert into recurring_rule
-       (user_id, name, kind, amount_mode, amount_satang, frequency_unit, frequency_interval,
-        anchor_day, start_date, end_date, default_account_id, category_id)
-     values ($1, $2, $3, $4, $5, $6, coalesce($7, 1), $8, $9, $10, $11, $12)
-     returning *`,
-    [
-      user.id,
-      str(b, 'name', 120),
-      enumStr(b, 'kind', KINDS),
-      b.amount_mode == null ? 'fixed' : enumStr(b, 'amount_mode', AMOUNT_MODES),
-      satang(b, 'amount_satang'),
-      enumStr(b, 'frequency_unit', UNITS),
-      optionalBoundedInt(b, 'frequency_interval', 1, 366),
-      optionalBoundedInt(b, 'anchor_day', 1, 31),
-      startDate,
-      endDate,
-      defaultAccountId,
-      categoryId,
-    ],
-  );
-  res.status(201).json(rows[0]);
+  // ตาราง recurring_rule ไม่มีคอลัมน์ความลับ — `returning *` เข้า audit ได้ตรง ๆ
+  const created = await tx(async (c) => {
+    const { rows } = await c.query<{ id: number }>(
+      `insert into recurring_rule
+         (user_id, name, kind, amount_mode, amount_satang, frequency_unit, frequency_interval,
+          anchor_day, start_date, end_date, default_account_id, category_id)
+       values ($1, $2, $3, $4, $5, $6, coalesce($7, 1), $8, $9, $10, $11, $12)
+       returning *`,
+      [
+        user.id,
+        str(b, 'name', 120),
+        enumStr(b, 'kind', KINDS),
+        b.amount_mode == null ? 'fixed' : enumStr(b, 'amount_mode', AMOUNT_MODES),
+        satang(b, 'amount_satang'),
+        enumStr(b, 'frequency_unit', UNITS),
+        optionalBoundedInt(b, 'frequency_interval', 1, 366),
+        optionalBoundedInt(b, 'anchor_day', 1, 31),
+        startDate,
+        endDate,
+        defaultAccountId,
+        categoryId,
+      ],
+    );
+    await audit(c, { userId: user.id, action: 'recurring_rule.create', entityType: 'recurring_rule', entityId: rows[0]!.id, after: rows[0], ip: req.ip ?? null });
+    return rows[0]!;
+  });
+  res.status(201).json(created);
 }));
 
 // การแก้กฎมีผลเฉพาะรายการในอนาคต (§9.2) — ไม่ต้องทำอะไรเพิ่มที่นี่ เพราะ generateMonthlyItems ข้ามกฎ
@@ -84,55 +90,65 @@ recurringRulesRouter.patch('/recurring-rules/:id', requireUser(async (req, res, 
   const categoryId = b.category_id == null || b.category_id === '' ? null : id(b, 'category_id');
   await assertOwnedRefs(pool, user.id, { bankAccountId: defaultAccountId, categoryId });
 
-  const { rows } = await query(
-    `update recurring_rule set
-       name = coalesce($3, name),
-       amount_mode = coalesce($4, amount_mode),
-       amount_satang = coalesce($5, amount_satang),
-       frequency_unit = coalesce($6, frequency_unit),
-       frequency_interval = coalesce($7, frequency_interval),
-       start_date = coalesce($8, start_date),
-       is_active = coalesce($9, is_active),
-       anchor_day = case when $10 then $11 else anchor_day end,
-       end_date = case when $12 then $13 else end_date end,
-       default_account_id = case when $14 then $15 else default_account_id end,
-       category_id = case when $16 then $17 else category_id end,
-       updated_at = now()
-     where id = $1 and user_id = $2
-     returning *`,
-    [
-      ruleId,
-      user.id,
-      b.name == null ? null : str(b, 'name', 120),
-      b.amount_mode == null ? null : enumStr(b, 'amount_mode', AMOUNT_MODES),
-      b.amount_satang == null ? null : satang(b, 'amount_satang'),
-      b.frequency_unit == null ? null : enumStr(b, 'frequency_unit', UNITS),
-      optionalBoundedInt(b, 'frequency_interval', 1, 366),
-      b.start_date == null ? null : isoDate(b, 'start_date'),
-      typeof b.is_active === 'boolean' ? b.is_active : null,
-      has('anchor_day'),
-      optionalBoundedInt(b, 'anchor_day', 1, 31),
-      has('end_date'),
-      b.end_date == null || b.end_date === '' ? null : isoDate(b, 'end_date'),
-      has('default_account_id'),
-      defaultAccountId,
-      has('category_id'),
-      categoryId,
-    ],
-  );
-  // end_date < start_date ที่เกิดจากการแก้ทีละฟิลด์ ให้ CHECK constraint ของตารางเป็นคนปฏิเสธ
-  // (error handler กลางแปลง 23514 เป็น 400) — เช็คในโค้ดหลัง update แล้ว throw จะ commit ค่าผิดไปก่อน
-  const rule = rows[0];
-  if (!rule) throw new HttpError(404, 'ไม่พบรายการประจำ');
+  const rule = await tx(async (c) => {
+    const before = (await c.query('select * from recurring_rule where id = $1 and user_id = $2', [ruleId, user.id])).rows[0];
+    const { rows } = await c.query(
+      `update recurring_rule set
+         name = coalesce($3, name),
+         amount_mode = coalesce($4, amount_mode),
+         amount_satang = coalesce($5, amount_satang),
+         frequency_unit = coalesce($6, frequency_unit),
+         frequency_interval = coalesce($7, frequency_interval),
+         start_date = coalesce($8, start_date),
+         is_active = coalesce($9, is_active),
+         anchor_day = case when $10 then $11 else anchor_day end,
+         end_date = case when $12 then $13 else end_date end,
+         default_account_id = case when $14 then $15 else default_account_id end,
+         category_id = case when $16 then $17 else category_id end,
+         updated_at = now()
+       where id = $1 and user_id = $2
+       returning *`,
+      [
+        ruleId,
+        user.id,
+        b.name == null ? null : str(b, 'name', 120),
+        b.amount_mode == null ? null : enumStr(b, 'amount_mode', AMOUNT_MODES),
+        b.amount_satang == null ? null : satang(b, 'amount_satang'),
+        b.frequency_unit == null ? null : enumStr(b, 'frequency_unit', UNITS),
+        optionalBoundedInt(b, 'frequency_interval', 1, 366),
+        b.start_date == null ? null : isoDate(b, 'start_date'),
+        typeof b.is_active === 'boolean' ? b.is_active : null,
+        has('anchor_day'),
+        optionalBoundedInt(b, 'anchor_day', 1, 31),
+        has('end_date'),
+        b.end_date == null || b.end_date === '' ? null : isoDate(b, 'end_date'),
+        has('default_account_id'),
+        defaultAccountId,
+        has('category_id'),
+        categoryId,
+      ],
+    );
+    // end_date < start_date ที่เกิดจากการแก้ทีละฟิลด์ ให้ CHECK constraint ของตารางเป็นคนปฏิเสธ
+    // (error handler กลางแปลง 23514 เป็น 400) — เช็คในโค้ดหลัง update แล้ว throw จะ commit ค่าผิดไปก่อน
+    if (!rows[0]) throw new HttpError(404, 'ไม่พบรายการประจำ');
+    await audit(c, { userId: user.id, action: 'recurring_rule.update', entityType: 'recurring_rule', entityId: ruleId, before, after: rows[0], ip: req.ip ?? null });
+    return rows[0];
+  });
   res.json(rule);
 }));
 
 // archive = ปิดใช้งาน ไม่ลบ — รายการที่เคย generate ไว้ในเดือนก่อน ๆ ต้องคงอยู่เป็นประวัติ
 recurringRulesRouter.post('/recurring-rules/:id/archive', requireUser(async (req, res, user) => {
-  const { rows } = await query(
-    'update recurring_rule set is_active = false, updated_at = now() where id = $1 and user_id = $2 returning *',
-    [pathId(req), user.id],
-  );
-  if (!rows[0]) throw new HttpError(404, 'ไม่พบรายการประจำ');
-  res.json(rows[0]);
+  const ruleId = pathId(req);
+  const archived = await tx(async (c) => {
+    const before = (await c.query('select * from recurring_rule where id = $1 and user_id = $2', [ruleId, user.id])).rows[0];
+    const { rows } = await c.query(
+      'update recurring_rule set is_active = false, updated_at = now() where id = $1 and user_id = $2 returning *',
+      [ruleId, user.id],
+    );
+    if (!rows[0]) throw new HttpError(404, 'ไม่พบรายการประจำ');
+    await audit(c, { userId: user.id, action: 'recurring_rule.archive', entityType: 'recurring_rule', entityId: ruleId, before, after: rows[0], ip: req.ip ?? null });
+    return rows[0];
+  });
+  res.json(archived);
 }));

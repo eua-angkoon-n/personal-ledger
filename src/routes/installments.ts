@@ -110,6 +110,7 @@ for (const action of ["skip", "restore"] as const)
             "update monthly_plan_item set explicit_status=$2,updated_at=now() where id=$1",
             [itemId, status],
           );
+          await audit(c, { userId: user.id, action: `installment_due.${action}`, entityType: "installment_due", entityId: due.id, before: { explicit_status: due.explicit_status }, after: { explicit_status: status }, ip: req.ip ?? null });
           return installmentDetail(c, user.id, due.installment_plan_id);
         }),
       );

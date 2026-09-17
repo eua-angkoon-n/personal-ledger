@@ -364,7 +364,7 @@ export default function MonthlyPlan() {
         title="วางแผนรายเดือน"
         description="รายการประจำ รายการเฉพาะเดือน และการยืนยันการจ่ายกับ statement จริง"
         action={
-          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }} data-tour="plan-toolbar">
             <Button
               variant="outlined"
               startIcon={<ContentCopyRounded />}

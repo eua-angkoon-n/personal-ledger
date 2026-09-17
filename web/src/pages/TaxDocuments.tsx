@@ -123,7 +123,7 @@ export default function TaxDocuments() {
         title="เอกสารภาษี"
         description="เก็บและเชื่อมใบกำกับภาษี ใบเสร็จ และหนังสือรับรองต่าง ๆ เข้ากับธุรกรรมจริง ไฟล์ถูกเข้ารหัสก่อนบันทึกเสมอ"
         action={
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} data-tour="taxdoc-actions">
             <Button variant="outlined" startIcon={<MarkEmailReadRounded />} onClick={() => setGmailPickerOpen(true)}>เลือกจาก Gmail</Button>
             <Button variant="contained" startIcon={<AddRounded />} onClick={() => setUploadOpen(true)} sx={{ whiteSpace: 'nowrap' }}>อัปโหลด</Button>
           </Stack>
@@ -171,7 +171,7 @@ export default function TaxDocuments() {
         />
       ) : (
         <>
-          <TableContainer component={Paper} variant="outlined" tabIndex={0} sx={{ mt: 3 }}>
+          <TableContainer component={Paper} variant="outlined" tabIndex={0} sx={{ mt: 3 }} data-tour="taxdoc-table">
             <Table size="small" aria-label="เอกสารภาษี" sx={{ minWidth: 780 }}>
               <TableHead>
                 <TableRow>

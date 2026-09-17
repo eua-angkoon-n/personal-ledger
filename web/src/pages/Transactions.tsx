@@ -167,7 +167,7 @@ export default function Transactions() {
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{COVERAGE_NOTE}</Typography>
 
-      <Stack spacing={1.5} sx={{ mt: 3 }}>
+      <Stack spacing={1.5} sx={{ mt: 3 }} data-tour="txn-toolbar">
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' }, flexWrap: 'wrap' }}>
           <MonthPicker value={month} onChange={(m) => setFilter({ month: m, from: null, to: null })} />
           {rangeMode && (
@@ -301,7 +301,9 @@ export default function Transactions() {
         />
       ) : (
         <>
-          <TransactionTable rows={rows} showRunningBalance={Boolean(bankAccountId)} onRowClick={setSelectedTxnId} busy={refreshing} />
+          <Box data-tour="txn-table">
+            <TransactionTable rows={rows} showRunningBalance={Boolean(bankAccountId)} onRowClick={setSelectedTxnId} busy={refreshing} />
+          </Box>
           <TablePagination
             component="div"
             count={totalCount}

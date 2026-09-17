@@ -28,7 +28,9 @@ incomeRecordsRouter.post(
   requireUser(async (req, res, user) => {
     const result = await tx(async (c) => {
       const recordId = await saveIncome(c, user.id, req.body);
-      return (await incomeRows(c, user.id, undefined, recordId))[0];
+      const row = (await incomeRows(c, user.id, undefined, recordId))[0];
+      await audit(c, { userId: user.id, action: "income_record.create", entityType: "income_record", entityId: recordId, after: row, ip: req.ip ?? null });
+      return row;
     });
     res.status(201).json(result);
   }),

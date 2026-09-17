@@ -145,7 +145,7 @@ export default function TaxSummary() {
       />
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{COVERAGE_NOTE}</Typography>
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 3, alignItems: { sm: 'center' }, flexWrap: 'wrap' }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 3, alignItems: { sm: 'center' }, flexWrap: 'wrap' }} data-tour="tax-toolbar">
         <TextField
           select size="small" label="ปีภาษี (ค.ศ.)" value={year}
           onChange={(e2) => setSearchParams((p) => { const n = new URLSearchParams(p); n.set('year', e2.target.value); return n; })}
@@ -228,7 +228,7 @@ export default function TaxSummary() {
             </Alert>
           )}
 
-          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', mt: 3 }}>
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', mt: 3 }} data-tour="tax-cards">
             <SummaryCard title="เงินได้จากงานประจำ" value={<Money satang={summary.inputs.employmentIncomeSatang} tone="income" />} caption="income_record ของ Tax Entity นี้ในปีภาษีนี้" />
             <SummaryCard
               title="รายได้ธุรกิจอื่น"
@@ -351,7 +351,11 @@ export default function TaxSummary() {
 
           <Divider sx={{ my: 3 }} />
 
-          {taxEntityId !== '' && <DeductionClaimSection taxEntityId={Number(taxEntityId)} taxYear={year} onChanged={() => setRevision((n) => n + 1)} />}
+          {taxEntityId !== '' && (
+            <Box data-tour="tax-deductions">
+              <DeductionClaimSection taxEntityId={Number(taxEntityId)} taxYear={year} onChanged={() => setRevision((n) => n + 1)} />
+            </Box>
+          )}
 
           <Divider sx={{ my: 3 }} />
 

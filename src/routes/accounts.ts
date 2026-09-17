@@ -9,6 +9,11 @@ import { audit } from '../services/audit.js';
 
 export const accountsRouter = Router();
 
+// ห้าม select pdf_password_enc ออกไปแม้แต่เข้า audit_log — GET /api/audit-log คืน before_data/after_data
+// ดิบให้เจ้าของอ่านได้ตรง ๆ ถ้าใส่ ciphertext ของรหัสผ่าน PDF เข้าไปจะรั่วไปอีกทางที่ไม่มีใครกันไว้
+// (บั๊กจริงที่เจอใน Slice 8 ตอน archive ใช้ `select *`) ทุก audit ของตารางนี้ต้องผ่านคอลัมน์ชุดนี้เท่านั้น
+const ACCOUNT_AUDIT_COLUMNS = 'id, nickname, account_number, bank_id, email_account_id, promptpay_id, default_tax_entity_id, archived_at';
+
 accountsRouter.get('/accounts', requireUser(async (_req, res, user) => {
   // ห้าม select pdf_password_enc ออกไปทาง API เด็ดขาด
   const { rows } = await query(
@@ -31,25 +36,30 @@ accountsRouter.post('/accounts', requireUser(async (req, res, user) => {
   const defaultTaxEntityId = b.default_tax_entity_id == null ? null : id(b, 'default_tax_entity_id');
   if (defaultTaxEntityId != null) await assertOwnsTaxEntity(user.id, defaultTaxEntityId);
 
-  const { rows } = await query<{ id: number }>(
-    `insert into bank_account (user_id, bank_id, email_account_id, nickname, account_number, pdf_password_enc, promptpay_id, default_tax_entity_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
-    [
-      user.id,
-      id(b, 'bank_id'),
-      emailAccountId,
-      str(b, 'nickname', 60),
-      str(b, 'account_number', 40),
-      encrypt(str(b, 'pdf_password', 200)),
-      optionalStr(b, 'promptpay_id', 40),
-      defaultTaxEntityId,
-    ],
-  );
+  // insert + audit อยู่ใน tx เดียวกัน ตามกฎของ audit(): แถวข้อมูลกับแถว audit ต้อง commit/rollback พร้อมกัน
+  const created = await tx(async (c) => {
+    const { rows } = await c.query<{ id: number }>(
+      `insert into bank_account (user_id, bank_id, email_account_id, nickname, account_number, pdf_password_enc, promptpay_id, default_tax_entity_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8) returning ${ACCOUNT_AUDIT_COLUMNS}`,
+      [
+        user.id,
+        id(b, 'bank_id'),
+        emailAccountId,
+        str(b, 'nickname', 60),
+        str(b, 'account_number', 40),
+        encrypt(str(b, 'pdf_password', 200)),
+        optionalStr(b, 'promptpay_id', 40),
+        defaultTaxEntityId,
+      ],
+    );
+    await audit(c, { userId: user.id, action: 'bank_account.create', entityType: 'bank_account', entityId: rows[0]!.id, after: rows[0], ip: req.ip ?? null });
+    return rows[0]!;
+  });
   // backfill เต็มกล่องแบบ fire-and-forget — ผู้ใช้ไม่ต้องรอ ต้องมี .catch() เสมอไม่งั้นโปรเซสตาย (unhandled rejection)
   syncEmailAccount(emailAccountId, { full: true }).catch((e) =>
     console.error(`[worker] backfill mailbox=${emailAccountId} ล้มเหลว:`, e),
   );
-  res.status(201).json({ id: rows[0]!.id });
+  res.status(201).json({ id: created.id });
 }));
 
 accountsRouter.patch('/accounts/:id', requireUser(async (req, res, user) => {
@@ -63,50 +73,61 @@ accountsRouter.patch('/accounts/:id', requireUser(async (req, res, user) => {
   const hasDefaultTaxEntity = Object.prototype.hasOwnProperty.call(b, 'default_tax_entity_id');
   const defaultTaxEntityId = hasDefaultTaxEntity && b.default_tax_entity_id != null ? id(b, 'default_tax_entity_id') : null;
   if (hasDefaultTaxEntity && defaultTaxEntityId != null) await assertOwnsTaxEntity(user.id, defaultTaxEntityId);
-  const { rows } = await query<{ id: number; email_account_id: number }>(
-    `update bank_account set
-       bank_id = coalesce($3, bank_id),
-       email_account_id = coalesce($4, email_account_id),
-       nickname = coalesce($5, nickname),
-       account_number = coalesce($6, account_number),
-       promptpay_id = case when $7 then $8 else promptpay_id end,
-       pdf_password_enc = coalesce($9, pdf_password_enc),
-       default_tax_entity_id = case when $10 then $11 else default_tax_entity_id end
-     where id = $1 and user_id = $2 and archived_at is null returning id, email_account_id`,
-    [
-      Number(req.params.id),
-      user.id,
-      b.bank_id == null ? null : id(b, 'bank_id'),
-      emailAccountId,
-      b.nickname == null ? null : str(b, 'nickname', 60),
-      b.account_number == null ? null : str(b, 'account_number', 40),
-      hasPromptpay,
-      hasPromptpay ? optionalStr(b, 'promptpay_id', 40) : null,
-      b.pdf_password == null || b.pdf_password === '' ? null : encrypt(str(b, 'pdf_password', 200)),
-      hasDefaultTaxEntity,
-      defaultTaxEntityId,
-    ],
+  const accountId = Number(req.params.id);
+  const updated = await tx(async (c) => {
+    const before = (await c.query(`select ${ACCOUNT_AUDIT_COLUMNS} from bank_account where id = $1 and user_id = $2`, [accountId, user.id])).rows[0];
+    const { rows } = await c.query<{ id: number; email_account_id: number }>(
+      `update bank_account set
+         bank_id = coalesce($3, bank_id),
+         email_account_id = coalesce($4, email_account_id),
+         nickname = coalesce($5, nickname),
+         account_number = coalesce($6, account_number),
+         promptpay_id = case when $7 then $8 else promptpay_id end,
+         pdf_password_enc = coalesce($9, pdf_password_enc),
+         default_tax_entity_id = case when $10 then $11 else default_tax_entity_id end
+       where id = $1 and user_id = $2 and archived_at is null returning ${ACCOUNT_AUDIT_COLUMNS}`,
+      [
+        accountId,
+        user.id,
+        b.bank_id == null ? null : id(b, 'bank_id'),
+        emailAccountId,
+        b.nickname == null ? null : str(b, 'nickname', 60),
+        b.account_number == null ? null : str(b, 'account_number', 40),
+        hasPromptpay,
+        hasPromptpay ? optionalStr(b, 'promptpay_id', 40) : null,
+        b.pdf_password == null || b.pdf_password === '' ? null : encrypt(str(b, 'pdf_password', 200)),
+        hasDefaultTaxEntity,
+        defaultTaxEntityId,
+      ],
+    );
+    if (!rows[0]) throw new HttpError(404, 'ไม่พบบัญชี');
+    // รหัสผ่าน PDF เปลี่ยนหรือไม่เก็บเป็น boolean ไม่ใช่ค่า — ต้องตรวจสอบได้ว่ามีคนเปลี่ยนแต่ห้ามเห็นค่า
+    await audit(c, {
+      userId: user.id,
+      action: 'bank_account.update',
+      entityType: 'bank_account',
+      entityId: accountId,
+      before,
+      after: { ...rows[0], pdf_password_changed: !(b.pdf_password == null || b.pdf_password === '') },
+      ip: req.ip ?? null,
+    });
+    return rows[0];
+  });
+  syncEmailAccount(updated.email_account_id, { full: true }).catch((e) =>
+    console.error(`[worker] reprocess account=${updated.id} ล้มเหลว:`, e),
   );
-  if (!rows[0]) throw new HttpError(404, 'ไม่พบบัญชี');
-  syncEmailAccount(rows[0].email_account_id, { full: true }).catch((e) =>
-    console.error(`[worker] reprocess account=${rows[0]!.id} ล้มเหลว:`, e),
-  );
-  res.json(rows[0]);
+  res.json({ id: updated.id, email_account_id: updated.email_account_id });
 }));
-
-// ห้าม select pdf_password_enc ออกไปแม้แต่เข้า audit_log — GET /api/audit-log คืน before_data/after_data
-// ดิบให้เจ้าของอ่านได้ตรง ๆ ถ้าใส่ ciphertext ของรหัสผ่าน PDF เข้าไปจะรั่วไปอีกทางที่ไม่มีใครกันไว้
-const ARCHIVE_AUDIT_COLUMNS = 'id, nickname, account_number, bank_id, email_account_id, promptpay_id, default_tax_entity_id, archived_at';
 
 accountsRouter.delete('/accounts/:id', requireUser(async (req, res, user) => {
   // เก็บเข้าคลัง (archive) แทนลบจริง — statement/txn ผูก on delete cascade กับ bank_account
   // ลบแถวจริงจะพาประวัติ statement/txn ทั้งชุดหายไปด้วย
   const accountId = Number(req.params.id);
   await tx(async (c) => {
-    const before = (await c.query(`select ${ARCHIVE_AUDIT_COLUMNS} from bank_account where id = $1 and user_id = $2`, [accountId, user.id])).rows[0];
+    const before = (await c.query(`select ${ACCOUNT_AUDIT_COLUMNS} from bank_account where id = $1 and user_id = $2`, [accountId, user.id])).rows[0];
     if (!before) throw new HttpError(404, 'ไม่พบบัญชี');
     const { rows } = await c.query(
-      `update bank_account set archived_at = now() where id = $1 and user_id = $2 and archived_at is null returning ${ARCHIVE_AUDIT_COLUMNS}`,
+      `update bank_account set archived_at = now() where id = $1 and user_id = $2 and archived_at is null returning ${ACCOUNT_AUDIT_COLUMNS}`,
       [accountId, user.id],
     );
     if (!rows[0]) throw new HttpError(404, 'ไม่พบบัญชี');

@@ -1,6 +1,6 @@
-import type { Pool, PoolClient } from 'pg';
-
-type Queryable = Pick<Pool | PoolClient, 'query'>;
+// รับแค่ความสามารถที่ audit() ใช้จริง — `Pool`/`PoolClient` เข้าได้อยู่แล้ว และ auth.ts ที่ถือ
+// `query` เป็นฟังก์ชันฉีดเข้ามา (createAuthRouter) ก็ห่อเป็น `{ query }` ส่งเข้าตรงนี้ได้เลย
+type Queryable = { query(text: string, params?: unknown[]): Promise<unknown> };
 
 export type AuditEvent = {
   userId: number;
