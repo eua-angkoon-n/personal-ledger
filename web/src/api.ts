@@ -535,3 +535,81 @@ export type AuditLogEntry = {
   created_at: string;
 };
 export type AuditLogListResponse = { rows: AuditLogEntry[]; total_count: number; limit: number; offset: number };
+
+// แผนปลดหนี้ กยศ. — projection คำนวณฝั่ง server ทุกครั้ง (src/services/student-loan.ts)
+// ฝั่งนี้ไม่ import เอนจินมาคำนวณซ้ำ เพราะ web/ เป็นคนละ vite root กับ src/
+export type StudentLoanScenario = 'lump_sum' | 'extra_monthly' | 'minimum_only';
+
+export type StudentLoan = {
+  id: number;
+  principal_original_satang: number;
+  first_due_date: string;
+  as_of_date: string;
+  principal_remaining_satang: number;
+  interest_accrued_satang: number;
+  monthly_payment_satang: number;
+  monthly_saving_satang: number;
+  savings_balance_satang: number;
+  app_annual_due_satang: number | null;
+  payoff_discount_bp: number;
+  payment_day: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StudentLoanInstallment = {
+  installment_no: number;
+  due_date: string;
+  principal_satang: number;
+  interest_satang: number;
+  total_satang: number;
+  min_monthly_satang: number;
+  is_current: boolean;
+};
+
+export type StudentLoanMonth = {
+  date: string;
+  installment_no: number;
+  opening_principal_satang: number;
+  interest_accrued_satang: number;
+  paid_satang: number;
+  paid_principal_satang: number;
+  paid_interest_satang: number;
+  closing_principal_satang: number;
+  interest_due_satang: number;
+  savings_satang: number;
+  payoff_quote_satang: number;
+};
+
+export type StudentLoanProjection = {
+  scenario: StudentLoanScenario;
+  payoff_date: string | null;
+  payoff_installment_no: number | null;
+  months_remaining: number;
+  total_payment_satang: number;
+  total_interest_satang: number;
+  discount_satang: number;
+  final_payoff_satang: number;
+  monthly: StudentLoanMonth[];
+  installments: StudentLoanInstallment[];
+  truncated: boolean;
+};
+
+export type StudentLoanInput = {
+  principal_original_satang: number;
+  first_due_date: string;
+  as_of_date: string;
+  principal_remaining_satang: number;
+  interest_accrued_satang: number;
+  monthly_payment_satang: number;
+  monthly_saving_satang: number;
+  savings_balance_satang: number;
+  payoff_discount_bp: number;
+  payment_day: number;
+};
+
+export type StudentLoanResponse = {
+  loan: StudentLoan | null;
+  input: StudentLoanInput | null;
+  projections: Record<StudentLoanScenario, StudentLoanProjection> | null;
+};
