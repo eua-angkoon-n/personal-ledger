@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   Paper,
   Stack,
   Table,
@@ -45,6 +46,9 @@ const SCENARIO_HINT: Record<StudentLoanScenario, string> = {
 };
 
 const SCENARIOS: StudentLoanScenario[] = ['lump_sum', 'extra_monthly', 'minimum_only'];
+
+/** รอให้พิมพ์นิ่งก่อนค่อยคำนวณใหม่ — สั้นกว่านี้หน้าจะกระตุกระหว่างพิมพ์ ยาวกว่านี้จะรู้สึกหน่วง */
+const WHAT_IF_DEBOUNCE_MS = 500;
 
 /** ต่างกันเกินเท่านี้ถือว่ากรอกเลขผิด ไม่ใช่ความคลาดเคลื่อนตามปกติ (500 บาท) */
 const CALIBRATION_TOLERANCE_SATANG = 500 * 100;
@@ -95,16 +99,28 @@ export default function StudentLoan() {
   // ลองปรับตัวเลขดูโดยไม่บันทึกทับของเดิม — ส่งเป็น query override ให้ server คำนวณใหม่
   const [whatIfSaving, setWhatIfSaving] = useState('');
   const [whatIfPayment, setWhatIfPayment] = useState('');
+  // ค่าที่ "ยิงจริง" ตามหลังค่าที่พิมพ์อยู่ WHAT_IF_DEBOUNCE_MS — ผูก queryString กับ state ที่พิมพ์
+  // ตรง ๆ จะยิง request ทุกครั้งที่กดคีย์ กว่าจะพิมพ์ 10000 ครบก็โหลดใหม่ไปห้ารอบ
+  const [appliedSaving, setAppliedSaving] = useState('');
+  const [appliedPayment, setAppliedPayment] = useState('');
   const requestIdRef = useRef(0);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAppliedSaving(whatIfSaving);
+      setAppliedPayment(whatIfPayment);
+    }, WHAT_IF_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [whatIfSaving, whatIfPayment]);
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
-    const saving = parseBahtToSatang(whatIfSaving);
+    const saving = parseBahtToSatang(appliedSaving);
     if (saving != null) p.set('monthly_saving_satang', String(saving));
-    const payment = parseBahtToSatang(whatIfPayment);
+    const payment = parseBahtToSatang(appliedPayment);
     if (payment != null) p.set('monthly_payment_satang', String(payment));
     return p.toString();
-  }, [whatIfSaving, whatIfPayment]);
+  }, [appliedSaving, appliedPayment]);
 
   const reload = async () => {
     const requestId = (requestIdRef.current += 1);
@@ -208,6 +224,8 @@ export default function StudentLoan() {
       setModalOpen(false);
       setWhatIfSaving('');
       setWhatIfPayment('');
+      setAppliedSaving('');
+      setAppliedPayment('');
       await reload();
     } catch (e) {
       setFormError(e instanceof Error ? e.message : 'บันทึกไม่สำเร็จ');
@@ -248,7 +266,7 @@ export default function StudentLoan() {
 
       {error && <LoadError message={error} onRetry={() => void reload()} />}
 
-      {loading ? (
+      {loading && data == null ? (
         <TableSkeleton rows={6} />
       ) : loan == null || projection == null ? (
         <EmptyState
@@ -376,9 +394,13 @@ export default function StudentLoan() {
           </Paper>
 
           <Paper variant="outlined" sx={{ p: 3 }}>
-            <Typography variant="h2" sx={{ fontSize: '1.25rem', mb: 1 }}>ลองปรับตัวเลขดู</Typography>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', mb: 1 }}>
+              <Typography variant="h2" sx={{ fontSize: '1.25rem' }}>ลองปรับตัวเลขดู</Typography>
+              {/* หน้าไม่ถูกล้างเป็น skeleton ระหว่างคำนวณใหม่แล้ว จึงต้องมีอะไรบอกว่ากำลังทำงานอยู่ */}
+              {loading && <CircularProgress size={16} aria-label="กำลังคำนวณใหม่" />}
+            </Stack>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              เปลี่ยนแล้วคำนวณใหม่ทันทีโดยไม่บันทึกทับของเดิม (ว่างไว้ = ใช้ค่าที่บันทึกไว้)
+              พิมพ์เสร็จแล้วรอครู่เดียวจะคำนวณใหม่ให้เอง ไม่บันทึกทับของเดิม (ว่างไว้ = ใช้ค่าที่บันทึกไว้)
             </Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField
