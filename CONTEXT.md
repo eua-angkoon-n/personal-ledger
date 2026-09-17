@@ -30,6 +30,8 @@ Gmail (poll ชั่วโมงละครั้ง)
 - **รหัสผ่าน PDF ส่งผ่าน stdin ไม่ใช่ argv** และ **PDF ที่ถอดรหัสแล้วห้ามลงดิสก์**
 - **Planning ห้ามสร้างหรือแก้ `txn`** (ADR-0002) — mark paid สร้าง `monthly_item_payment` สถานะ `declared`
   แล้วรอ statement จริงมาจับคู่เป็น `matched` เท่านั้น ห้ามปั้น `txn` ให้ตัวเลขบนจอดูครบก่อนเวลา
+- **ขั้นต่ำ กยศ. ไม่ใช่ค่าคงที่** เงินต้นแต่ละงวดคิดเป็น % ของ *เงินต้นตามสัญญา* ตามตาราง Step Up ซึ่งเพิ่มขึ้นทุกปี
+  ห้ามเอายอดขั้นต่ำของปีนี้ไปคูณตลอดอายุสัญญา และดอกเบี้ยเดินรายวัน (คงเหลือ × 1% ÷ 365) ห้ามใช้ 1/12 ต่อเดือน
 - **`txn.txn_date` = วันที่ในบรรทัดของ statement** ไม่ใช่วันที่อีเมลมาถึง (ไม่งั้นปีภาษีเพี้ยน)
 - **checksum ไม่ผ่าน = ไม่เขียนสักแถว** ตั้ง `status='checksum_failed'` แล้วแจ้งเตือน
 - **fixture ที่ commit ได้ = ข้อความที่สกัดแล้วและ redact แล้วเท่านั้น** ห้าม commit ไฟล์ PDF หรือ `.eml` จริง
@@ -54,12 +56,14 @@ Gmail (poll ชั่วโมงละครั้ง)
 | `src/services/transfer-matching.ts` | หา candidate คู่โอนภายในให้ user (logic ข้ามตารางแยกจาก route ตาม ADR-0002) |
 | `src/services/report-query.ts` | SQL fragment ร่วมของรายงาน/รายการธุรกรรม (`OWNED_TXN_FROM`, `TXN_FILTER_SQL`, `parseRange`, `accountCoverage`) |
 | `src/services/plan-query.ts` | SQL fragment ร่วมของแผนรายเดือน (`PAYMENT_STATE_SQL`, `planTotals`, `loadOwnedItem`) — หน้าแผนและการ์ด Dashboard ต้องใช้ตัวเดียวกัน |
+| `src/services/student-loan.ts` | แผนปลดหนี้ กยศ. — ตาราง Step Up 15 งวด, ดอกเบี้ย 1%/ปี เดินรายวัน, ลำดับตัดชำระตาม พ.ร.บ. 2566 (pure ไม่แตะ DB) |
 | `src/services/recurring-generation.ts` | กางรายการประจำเป็นวันครบกำหนด (`occurrencesInMonth` เป็น pure ไม่แตะ DB) insert-only จึงไม่ย้อนแก้เดือนเก่า |
 | `src/services/payment-reconciliation.ts` | จับคู่ Payment Declaration กับ `txn` จริงตามเกณฑ์ §9.5 — auto-match เฉพาะ candidate เดียว |
 | `src/parsers/index.ts` | registry `parser_key` → ฟังก์ชัน parse (ใช้ร่วมกันทั้ง `src/routes/banks.ts` และ `src/worker.ts`) |
 | `web/` | React (Vite), router คือ `react-router-dom` (`App.tsx` ครอบ auth gate ไว้ข้างนอก `<Routes>`) |
 | `web/src/pages/Dashboard.tsx` | สรุปเงินเข้า/ออก/คงเหลือ + 3 กราฟ (`@mui/x-charts`) ต่อเดือน คลิก segment ไป `/transactions` ตาม contract ใน `report-query.ts` |
 | `web/src/pages/Transactions.tsx` | ตารางธุรกรรม filter ผ่าน URL (`useSearchParams`), เปิด `ReviewDrawer` ต่อแถว |
+| `web/src/pages/StudentLoan.tsx` | หน้าแผนปลดหนี้ กยศ. (`/student-loan`) — เทียบ 3 ทางเลือก, ตารางงวดรายปี/รายเดือน, projection คำนวณฝั่ง server ไม่เก็บ DB |
 | `web/src/pages/MonthlyPlan.tsx` | แผนรายเดือน (`/planning?month=`) — รายการประจำ/เฉพาะเดือน, mark paid, ปิด-เปิดเดือน |
 | `web/src/components/` | ส่วนใช้ร่วม — `Money`/`MonthPicker`/`SummaryCard`/`ChartCard`/`TransactionTable`/`DataFreshness`/`ReviewDrawer`/`PaymentStatusChip` |
 

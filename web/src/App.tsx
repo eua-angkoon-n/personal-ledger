@@ -29,6 +29,7 @@ import LoginRounded from '@mui/icons-material/LoginRounded';
 import LogoutRounded from '@mui/icons-material/LogoutRounded';
 import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded';
 import ReceiptRounded from '@mui/icons-material/ReceiptRounded';
+import SchoolRounded from '@mui/icons-material/SchoolRounded';
 import SettingsRounded from '@mui/icons-material/SettingsRounded';
 import { post, req, type User } from './api.js';
 import Accounts from './Accounts.js';
@@ -41,6 +42,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard.js'));
 const Transactions = lazy(() => import('./pages/Transactions.js'));
 const MonthlyPlan = lazy(() => import('./pages/MonthlyPlan.js'));
 const Installments = lazy(() => import('./pages/Installments.js'));
+const StudentLoan = lazy(() => import('./pages/StudentLoan.js'));
 const TaxDocuments = lazy(() => import('./pages/TaxDocuments.js'));
 const TaxSummary = lazy(() => import('./pages/TaxSummary.js'));
 const AuditLog = lazy(() => import('./pages/AuditLog.js'));
@@ -51,6 +53,7 @@ const NAV_ITEMS = [
   { path: '/dashboard', label: 'แดชบอร์ด', icon: <AssessmentRounded /> },
   { path: '/transactions', label: 'ธุรกรรม', icon: <ReceiptLongRounded /> },
   { path: '/planning', label: 'วางแผน', icon: <EventRepeatRounded /> },
+  { path: '/student-loan', label: 'หนี้ กยศ.', icon: <SchoolRounded /> },
   { path: '/tax-documents', label: 'เอกสารภาษี', icon: <ReceiptRounded /> },
   { path: '/tax', label: 'ภาษี', icon: <CalculateRounded /> },
   { path: '/accounts', label: 'บัญชีของฉัน', icon: <AccountBalanceRounded /> },
@@ -247,6 +250,7 @@ export default function App() {
             <Route path="/planning" element={<Box component="section" aria-labelledby="planning-heading"><MonthlyPlan /></Box>} />
             <Route path="/installments" element={<Installments />} />
             <Route path="/installments/:id" element={<Installments />} />
+            <Route path="/student-loan" element={<Box component="section" aria-labelledby="student-loan-heading"><StudentLoan /></Box>} />
             <Route path="/tax-documents" element={<Box component="section" aria-labelledby="tax-documents-heading"><TaxDocuments /></Box>} />
             <Route path="/tax" element={<Box component="section" aria-labelledby="tax-summary-heading"><TaxSummary /></Box>} />
             <Route path="/audit" element={<Box component="section" aria-labelledby="audit-log-heading"><AuditLog /></Box>} />
