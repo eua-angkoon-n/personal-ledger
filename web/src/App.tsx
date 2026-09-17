@@ -12,7 +12,6 @@ import {
   Stack,
   Tab,
   Tabs,
-  TextField,
   Toolbar,
   Tooltip,
   Typography,
@@ -27,14 +26,15 @@ import HistoryRounded from '@mui/icons-material/HistoryRounded';
 import HourglassTopRounded from '@mui/icons-material/HourglassTopRounded';
 import LoginRounded from '@mui/icons-material/LoginRounded';
 import LogoutRounded from '@mui/icons-material/LogoutRounded';
+import MenuBookRounded from '@mui/icons-material/MenuBookRounded';
 import ReceiptLongRounded from '@mui/icons-material/ReceiptLongRounded';
 import ReceiptRounded from '@mui/icons-material/ReceiptRounded';
 import SettingsRounded from '@mui/icons-material/SettingsRounded';
-import { post, req, type User } from './api.js';
+import { req, type User } from './api.js';
 import Accounts from './Accounts.js';
 import Admin from './Admin.js';
 import { brandCopySx, dataTextSx, descriptionSx } from './theme.js';
-import { FeedbackSnackbar, PageHeader, TableSkeleton, type Notice } from './ui.js';
+import { FeedbackSnackbar, PageHeader, TableSkeleton, VersionBadge, type Notice } from './ui.js';
 
 // แยก chunk เฉพาะ Dashboard — เป็นหน้าเดียวที่ดึง @mui/x-charts (~600KB) เข้ามา หน้าอื่นไม่ต้องรอโหลดมันด้วย
 const Dashboard = lazy(() => import('./pages/Dashboard.js'));
@@ -44,8 +44,9 @@ const Installments = lazy(() => import('./pages/Installments.js'));
 const TaxDocuments = lazy(() => import('./pages/TaxDocuments.js'));
 const TaxSummary = lazy(() => import('./pages/TaxSummary.js'));
 const AuditLog = lazy(() => import('./pages/AuditLog.js'));
+const Help = lazy(() => import('./pages/Help.js'));
 
-type SettingsTab = 'banks' | 'users';
+type SettingsTab = 'banks' | 'users' | 'audit';
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'แดชบอร์ด', icon: <AssessmentRounded /> },
@@ -86,20 +87,26 @@ function SettingsPage({ userId }: { userId: number }) {
       >
         <Tab value="banks" label="ธนาคาร (แอดมิน)" />
         <Tab value="users" label="ผู้ใช้ (แอดมิน)" />
+        <Tab value="audit" label="บันทึกระบบ (แอดมิน)" />
       </Tabs>
 
       {settingsTab === 'banks' && <Admin.Banks />}
       {settingsTab === 'users' && <Admin.Users currentUserId={userId} />}
+      {/* ใช้คอมโพเนนต์เดียวกับหน้า /audit — ต่างกันแค่ variant ที่ส่ง scope=all ไปให้ API */}
+      {settingsTab === 'audit' && (
+        <Suspense fallback={<TableSkeleton rows={8} />}><AuditLog variant="admin" /></Suspense>
+      )}
     </Box>
   );
 }
 
-function AuthPanel({ children }: { children: ReactNode }) {
+function AuthPanel({ children, version }: { children: ReactNode; version: string | null }) {
   return (
     <Box component="main" sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', p: { xs: 2, sm: 3 } }}>
       <Paper component="section" variant="outlined" sx={{ width: 'min(100%, 27rem)', p: { xs: 3, sm: 4 } }}>
         {children}
       </Paper>
+      <VersionBadge version={version} />
     </Box>
   );
 }
@@ -107,12 +114,16 @@ function AuthPanel({ children }: { children: ReactNode }) {
 export default function App() {
   const routerLocation = useLocation();
   const [user, setUser] = useState<User | null | undefined>(undefined);
+  const [version, setVersion] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
 
   useEffect(() => {
-    req<{ user: User | null }>('/api/me')
-      .then((response) => setUser(response.user))
+    req<{ user: User | null; version: string }>('/api/me')
+      .then((response) => {
+        setUser(response.user);
+        setVersion(response.version);
+      })
       .catch(() => setUser(null));
   }, []);
 
@@ -129,7 +140,7 @@ export default function App() {
 
   if (user === undefined) {
     return (
-      <AuthPanel>
+      <AuthPanel version={version}>
         <Stack spacing={2} role="status" aria-label="กำลังโหลดข้อมูลผู้ใช้">
           <Skeleton variant="circular" width={44} height={44} />
           <Skeleton width="55%" height={38} />
@@ -142,7 +153,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <AuthPanel>
+      <AuthPanel version={version}>
         <Stack spacing={3} sx={{ alignItems: 'center', textAlign: 'center' }}>
           <Box sx={{ display: 'grid', placeItems: 'center', width: 56, height: 56, border: 1, borderColor: 'divider', borderRadius: 2, bgcolor: 'background.default', color: 'text.primary' }}>
             <AccountBalanceWalletRounded sx={{ fontSize: 34 }} />
@@ -165,7 +176,7 @@ export default function App() {
     const isPending = user.status === 'pending';
     return (
       <>
-        <AuthPanel>
+        <AuthPanel version={version}>
           <Stack spacing={3} sx={{ alignItems: 'flex-start' }}>
             {isPending
               ? <HourglassTopRounded sx={{ color: 'text.secondary', fontSize: 40 }} />
@@ -226,6 +237,9 @@ export default function App() {
                 />
               )}
             </Tabs>
+            <Tooltip title="คู่มือการใช้งาน">
+              <IconButton color="inherit" aria-label="คู่มือการใช้งาน" component={Link} to="/help"><MenuBookRounded /></IconButton>
+            </Tooltip>
             <Tooltip title="ประวัติการเปลี่ยนแปลง">
               <IconButton color="inherit" aria-label="ประวัติการเปลี่ยนแปลง" component={Link} to="/audit"><HistoryRounded /></IconButton>
             </Tooltip>
@@ -250,6 +264,7 @@ export default function App() {
             <Route path="/tax-documents" element={<Box component="section" aria-labelledby="tax-documents-heading"><TaxDocuments /></Box>} />
             <Route path="/tax" element={<Box component="section" aria-labelledby="tax-summary-heading"><TaxSummary /></Box>} />
             <Route path="/audit" element={<Box component="section" aria-labelledby="audit-log-heading"><AuditLog /></Box>} />
+            <Route path="/help" element={<Box component="section" aria-labelledby="help-heading"><Help /></Box>} />
             <Route path="/accounts" element={<Box component="section" aria-labelledby="accounts-heading"><Accounts /></Box>} />
             {user.is_admin && <Route path="/settings" element={<SettingsPage userId={user.id} />} />}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
@@ -257,6 +272,7 @@ export default function App() {
         </Suspense>
       </Container>
       <FeedbackSnackbar notice={notice} onClose={() => setNotice(null)} />
+      <VersionBadge version={version} />
     </Box>
   );
 }

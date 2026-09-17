@@ -98,6 +98,7 @@ async function createTaxDocument(
   meta: TaxDocMeta,
   buf: Buffer,
   originalFilename: string,
+  ip: string | null,
   gmail?: { messageId: string; attachmentId: string },
 ) {
   const mime = detectMime(buf);
@@ -131,6 +132,17 @@ async function createTaxDocument(
       originalFilename, gmail?.messageId ?? null, gmail?.attachmentId ?? null,
     ],
   );
+  // audit ตรงนี้ครอบทั้งอัปโหลดไฟล์และดึงจาก Gmail (สองเส้นทางเข้าฟังก์ชันเดียวกัน)
+  // ไม่ได้อยู่ใน tx เดียวกับ insert เพราะ storeFile เขียนดิสก์ไปแล้วก่อนหน้า — ตามแบบเดียวกับ tax.export
+  // TAX_DOC_COLUMNS ไม่มี storage_path/file_sha256/gmail_attachment_id อยู่แล้ว จึงไม่มีอะไรลับหลุดเข้า log
+  await audit(pool, {
+    userId,
+    action: 'tax_document.upload',
+    entityType: 'tax_document',
+    entityId: (rows[0] as { id: number }).id,
+    after: { ...rows[0], source: gmail ? 'gmail' : 'upload' },
+    ip,
+  });
   return rows[0];
 }
 
@@ -210,7 +222,7 @@ taxDocumentsRouter.post('/tax-documents', requireUser(async (req, res, user) => 
   const buf = Buffer.from(fileBase64, 'base64');
   if (buf.length === 0) throw new HttpError(400, 'file_base64 ไม่ถูกต้อง');
 
-  const doc = await createTaxDocument(user.id, meta, buf, filename);
+  const doc = await createTaxDocument(user.id, meta, buf, filename, req.ip ?? null);
   res.status(201).json(doc);
 }));
 
@@ -231,7 +243,7 @@ taxDocumentsRouter.post('/tax-documents/from-gmail', requireUser(async (req, res
   const accessToken = await refreshAccessToken(decrypt(acct.rows[0]!.refresh_token_enc));
   const buf = await getAttachment(accessToken, gmailMessageId, gmailAttachmentId);
 
-  const doc = await createTaxDocument(user.id, meta, buf, filename, { messageId: gmailMessageId, attachmentId: gmailAttachmentId });
+  const doc = await createTaxDocument(user.id, meta, buf, filename, req.ip ?? null, { messageId: gmailMessageId, attachmentId: gmailAttachmentId });
   res.status(201).json(doc);
 }));
 
@@ -277,50 +289,59 @@ taxDocumentsRouter.patch('/tax-documents/:id', requireUser(async (req, res, user
   const totalSatangValue = b.total_satang == null ? null : satang(b, 'total_satang');
   const status = b.status == null ? null : enumStr(b, 'status', STATUSES);
 
-  const { rows } = await query(
-    `update tax_document set
-       tax_entity_id = coalesce($3, tax_entity_id),
-       document_type = coalesce($4, document_type),
-       tax_year = coalesce($5, tax_year),
-       issuer_name = coalesce($6, issuer_name),
-       issuer_tax_id = case when $7 then $8 else issuer_tax_id end,
-       recipient_tax_id = case when $9 then $10 else recipient_tax_id end,
-       document_no = case when $11 then $12 else document_no end,
-       issue_date = case when $13 then $14 else issue_date end,
-       subtotal_satang = case when $15 then $16 else subtotal_satang end,
-       vat_satang = case when $17 then $18 else vat_satang end,
-       total_satang = coalesce($19, total_satang),
-       withholding_satang = case when $20 then $21 else withholding_satang end,
-       status = coalesce($22, status),
-       verified_at = case when $22 = 'verified' then now() when $22 = 'draft' then null else verified_at end,
-       updated_at = now()
-     where id = $1 and user_id = $2 and archived_at is null
-     returning ${TAX_DOC_COLUMNS}`,
-    [
-      docId, user.id, newTaxEntityId, documentType, taxYearValue, issuerName,
-      issuerTaxIdProvided, issuerTaxIdProvided ? optionalStr(b, 'issuer_tax_id', 20) : null,
-      recipientTaxIdProvided, recipientTaxIdProvided ? optionalStr(b, 'recipient_tax_id', 20) : null,
-      documentNoProvided, documentNoProvided ? optionalStr(b, 'document_no', 100) : null,
-      issueDateProvided, issueDateProvided ? (b.issue_date == null || b.issue_date === '' ? null : isoDate(b, 'issue_date')) : null,
-      subtotalProvided, subtotalProvided ? optionalSatang(b, 'subtotal_satang') : null,
-      vatProvided, vatProvided ? optionalSatang(b, 'vat_satang') : null,
-      totalSatangValue,
-      withholdingProvided, withholdingProvided ? optionalSatang(b, 'withholding_satang') : null,
-      status,
-    ],
-  );
-  if (!rows[0]) throw new HttpError(404, 'ไม่พบเอกสาร');
-  res.json(rows[0]);
+  const updated = await tx(async (c) => {
+    const before = (await c.query(`select ${TAX_DOC_COLUMNS} from tax_document where id = $1 and user_id = $2`, [docId, user.id])).rows[0];
+    const { rows } = await c.query(
+      `update tax_document set
+         tax_entity_id = coalesce($3, tax_entity_id),
+         document_type = coalesce($4, document_type),
+         tax_year = coalesce($5, tax_year),
+         issuer_name = coalesce($6, issuer_name),
+         issuer_tax_id = case when $7 then $8 else issuer_tax_id end,
+         recipient_tax_id = case when $9 then $10 else recipient_tax_id end,
+         document_no = case when $11 then $12 else document_no end,
+         issue_date = case when $13 then $14 else issue_date end,
+         subtotal_satang = case when $15 then $16 else subtotal_satang end,
+         vat_satang = case when $17 then $18 else vat_satang end,
+         total_satang = coalesce($19, total_satang),
+         withholding_satang = case when $20 then $21 else withholding_satang end,
+         status = coalesce($22, status),
+         verified_at = case when $22 = 'verified' then now() when $22 = 'draft' then null else verified_at end,
+         updated_at = now()
+       where id = $1 and user_id = $2 and archived_at is null
+       returning ${TAX_DOC_COLUMNS}`,
+      [
+        docId, user.id, newTaxEntityId, documentType, taxYearValue, issuerName,
+        issuerTaxIdProvided, issuerTaxIdProvided ? optionalStr(b, 'issuer_tax_id', 20) : null,
+        recipientTaxIdProvided, recipientTaxIdProvided ? optionalStr(b, 'recipient_tax_id', 20) : null,
+        documentNoProvided, documentNoProvided ? optionalStr(b, 'document_no', 100) : null,
+        issueDateProvided, issueDateProvided ? (b.issue_date == null || b.issue_date === '' ? null : isoDate(b, 'issue_date')) : null,
+        subtotalProvided, subtotalProvided ? optionalSatang(b, 'subtotal_satang') : null,
+        vatProvided, vatProvided ? optionalSatang(b, 'vat_satang') : null,
+        totalSatangValue,
+        withholdingProvided, withholdingProvided ? optionalSatang(b, 'withholding_satang') : null,
+        status,
+      ],
+    );
+    if (!rows[0]) throw new HttpError(404, 'ไม่พบเอกสาร');
+    await audit(c, { userId: user.id, action: 'tax_document.update', entityType: 'tax_document', entityId: docId, before, after: rows[0], ip: req.ip ?? null });
+    return rows[0];
+  });
+  res.json(updated);
 }));
 
 // เก็บเข้าคลัง (archive) แทนลบจริง — ไฟล์ยังอยู่บนดิสก์ (เข้ารหัสอยู่) ไม่ลบตาม §17 "Hard Delete ทำลายประวัติ"
 taxDocumentsRouter.delete('/tax-documents/:id', requireUser(async (req, res, user) => {
   const docId = pathId(req);
-  const { rowCount } = await query(
-    'update tax_document set archived_at = now(), updated_at = now() where id = $1 and user_id = $2 and archived_at is null',
-    [docId, user.id],
-  );
-  if (!rowCount) throw new HttpError(404, 'ไม่พบเอกสาร');
+  await tx(async (c) => {
+    const before = (await c.query(`select ${TAX_DOC_COLUMNS} from tax_document where id = $1 and user_id = $2 and archived_at is null`, [docId, user.id])).rows[0];
+    const { rowCount } = await c.query(
+      'update tax_document set archived_at = now(), updated_at = now() where id = $1 and user_id = $2 and archived_at is null',
+      [docId, user.id],
+    );
+    if (!rowCount) throw new HttpError(404, 'ไม่พบเอกสาร');
+    await audit(c, { userId: user.id, action: 'tax_document.archive', entityType: 'tax_document', entityId: docId, before, ip: req.ip ?? null });
+  });
   res.status(204).end();
 }));
 

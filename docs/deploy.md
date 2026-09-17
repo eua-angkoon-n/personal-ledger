@@ -42,8 +42,18 @@ VPS Contabo, Docker Compose ต่อโปรเจกต์, Caddy รัน�
 
 ## อัปเดต
 
+**ก่อน** push งานที่จะขึ้น production: ขยับ `APP_VERSION` ใน `src/version.ts` และเพิ่มหัวข้อ
+ใหม่ใน `CHANGELOG.md` (minor = ฟีเจอร์ใหม่, patch = แก้บั๊ก) — กฎเต็มอยู่ที่ `AGENTS.md` §Versioning
+
 ```sh
 git pull && docker compose up -d --build
+```
+
+เสร็จแล้วเปิดเว็บดูเลขมุมล่างขวาว่าตรงกับที่ปล่อยไป ถ้าไม่ตรงคือ build ไม่ได้ขึ้นจริง
+ตรวจจากในคอนเทนเนอร์ได้ (ไม่ต้องยิงผ่านเน็ตเพื่ออ่านเลขเวอร์ชัน):
+
+```sh
+docker compose exec app node -e "import('./dist/version.js').then(m => console.log(m.APP_VERSION))"
 ```
 
 ## ข้อควรระวัง

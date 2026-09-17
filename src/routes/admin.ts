@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { requireAdmin, revokeAtGoogle } from '../auth.js';
 import { decrypt } from '../crypto.js';
-import { query } from '../db.js';
+import { query, tx } from '../db.js';
 import { HttpError, type Body } from '../http.js';
 import { PARSER_KEYS } from '../parsers/index.js';
+import { audit } from '../services/audit.js';
 
 export const adminRouter = Router();
 
@@ -42,11 +43,27 @@ adminRouter.patch('/admin/users/:id', requireAdmin(async (req, res, admin) => {
       await revokeAtGoogle(decrypt(r.refresh_token_enc));
     }
   }
-  const { rows } = await query(
-    `update app_user set status = coalesce($2, status), is_admin = coalesce($3, is_admin)
-     where id = $1 returning id, email, status, is_admin`,
-    [targetId, status, isAdmin],
-  );
-  if (!rows[0]) throw new HttpError(404, 'ไม่พบผู้ใช้');
-  res.json(rows[0]);
+  // audit_log.user_id = **ผู้ลงมือ** (แอดมิน) ไม่ใช่ผู้ถูกกระทำ คำถามที่ต้องตอบได้คือ "ใครอนุมัติ/ปฏิเสธคนนี้"
+  // ผลตามมาโดยตั้งใจ: แถวนี้ไม่โผล่ในหน้า /audit ของผู้ถูกกระทำ แต่โผล่ในมุมมองแอดมิน (?scope=all)
+  const updated = await tx(async (c) => {
+    const before = (await c.query('select id, email, status, is_admin from app_user where id = $1', [targetId])).rows[0];
+    if (!before) throw new HttpError(404, 'ไม่พบผู้ใช้');
+    const { rows } = await c.query(
+      `update app_user set status = coalesce($2, status), is_admin = coalesce($3, is_admin)
+       where id = $1 returning id, email, status, is_admin`,
+      [targetId, status, isAdmin],
+    );
+    if (!rows[0]) throw new HttpError(404, 'ไม่พบผู้ใช้');
+    await audit(c, {
+      userId: admin.id,
+      action: 'app_user.update',
+      entityType: 'app_user',
+      entityId: targetId,
+      before,
+      after: rows[0],
+      ip: req.ip ?? null,
+    });
+    return rows[0];
+  });
+  res.json(updated);
 }));

@@ -526,6 +526,9 @@ export type TaxDeductionClaim = {
 
 export type AuditLogEntry = {
   id: number;
+  user_id: number;
+  user_email: string;
+  user_display_name: string;
   action: string;
   entity_type: string;
   entity_id: number | null;

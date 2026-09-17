@@ -335,6 +335,71 @@
 Slice 4A–8 เสร็จครบตามแผน — ตัดสินใจไม่ทำ OCR/text extraction เอกสารภาษี (§10.3) และ ภ.ง.ด.90/91
 เต็มรูป/ภาษีนิติบุคคล (CIT) ต่อ ถือว่างานตามแผนเดิมจบแล้ว
 
+## หลังปิดสโคป — v1.1.0: Version / คู่มือระบบ / Server Log (เสร็จแล้ว)
+
+งานสามเรื่องที่เจ้าของงานสั่งเพิ่มหลังปิดสโคปเดิม ทำบนสาขา `worktree-version-guide-serverlog`
+
+**1. Version Control**
+
+- `src/version.ts` (`APP_VERSION`) เป็นแหล่งเดียว — ไม่ใช้ `package.json` เพราะ `private: true` ไม่มี field
+  `version` และการอ่านไฟล์นั้นตอนบูตต้องพึ่งว่า Dockerfile ยัง `COPY package.json` เข้า runtime stage
+- `GET /api/me` ส่ง `version` มาด้วย (เป็น endpoint เดียวที่เว็บเรียกก่อนรู้ว่าล็อกอินหรือยัง จึงได้เลขบน
+  หน้าเข้าสู่ระบบฟรี) — เว็บ import จาก `src/` ตรง ๆ ไม่ได้เพราะ vite root เป็น `web/`
+- `VersionBadge` ใน `web/src/ui.tsx` ตรึงมุมล่างขวา `pointerEvents: none`, ฟอนต์ data, `zIndex.fab`
+- **กฎบังคับ**: `AGENTS.md` §Versioning + `docs/deploy.md` §อัปเดต — ขยับเลข + เพิ่มหัวข้อ `CHANGELOG.md`
+  ทุกครั้งที่ deploy · minor = ฟีเจอร์, patch = แก้บั๊ก
+- **ตั้งใจไม่ทำ**: ฝัง git sha (ต้องเพิ่ม build arg ใน Dockerfile), hook auto-bump
+
+**2. คู่มือระบบ + ปุ่ม Guide**
+
+- `web/src/guide/guides.ts` เป็นเนื้อหาชุดเดียว ใช้ทั้ง tour และหน้า `/help` (ครบ 9 หน้า)
+- `GuideTour.tsx` เขียนด้วย MUI ล้วน ไม่เพิ่ม dependency — ไฮไลต์ด้วย `box-shadow` spread 9999px
+  (ได้ "รูโหว่" ในฉากมืดโดยไม่ต้องวาดสี่กล่องล้อม) ชั้นบล็อกคลิกแยกจากกรอบไฮไลต์
+- **จงใจไม่มี transition บนกรอบไฮไลต์**: ตำแหน่งถูกเซ็ตใหม่ทุก scroll event ถ้าใส่ transition กรอบจะ
+  วิ่งตามหลังจอตอนเลื่อน · Esc/←/→ ใช้ได้ · คืน focus ให้ปุ่มต้นทางหลังปิด
+- `GuideButton` เรนเดอร์ใน `PageHeader` เฉพาะ `level={1}` → ขึ้นครบ 9 หน้าจากการแก้ที่เดียว
+  (**ห้ามใช้ prop `action` ของ PageHeader** — ถูกใช้ไปแล้วเกือบทุกหน้า)
+- **ไม่เปิดเองอัตโนมัติ** (ผู้ใช้สั่งว่า "กดแล้วจะมี Highlight") แต่มีจุดสีบนปุ่มจนกดครั้งแรกของหน้านั้น
+  จำผ่าน `localStorage` ต่อเบราว์เซอร์ ห่อ try/catch ทุกจุด — ถ้าต้องจำข้ามเครื่องค่อยเพิ่มตาราง `user_pref`
+- ขั้นที่หา element ไม่เจอถูก**กรองออกตอนเปิด** ไม่ใช่ทำให้ tour พัง — แลกกับความเสี่ยงที่คู่มือจะค่อย ๆ
+  หายเงียบ ๆ จึงมี `test/guides.test.ts` ตรวจว่าทุก selector ยังมีอยู่ใน `web/src` และทุกหน้ามีขั้นแบบ
+  การ์ดกลางจอ (ไม่พึ่ง selector) อย่างน้อยหนึ่งขั้น
+
+**3. Server Log**
+
+- ไม่สร้างตารางใหม่ — ใช้ `audit_log` (migration 009) และ `audit()` เดิม **ไม่มี migration ในงานนี้**
+- เติม audit ครบทุก route ที่แก้ข้อมูล: `bank_account.create/update`, `bank.create/update/delete`,
+  `category.create/update`, `tax_entity.create/update`, `recurring_rule.create/update/archive`,
+  `income_record.create/update/match/unmatch`, `tax_document.upload/update/archive`,
+  `installment_due.skip/restore`, `email_account.sync`, `app_user.update`
+- เหตุการณ์ auth: `auth.login` / `auth.signup` / `auth.mailbox_add` / `auth.logout` — `logout` อ่าน
+  `session.userId` ก่อน `destroy` และ audit ล้มห้ามกันคนออกจากระบบ (catch → stdout)
+- **ที่ล้มเหลวลง stdout เท่านั้น** (`logAuthFailure`) เพราะ `audit_log.user_id` เป็น
+  `not null references app_user(id)` — เหตุการณ์ที่ยังไม่มีเจ้าของเขียนลงตารางไม่ได้โดยโครงสร้าง และ
+  ทำให้ nullable จะเปิดทางให้คนนอกยิงจนตารางบวม (เจ้าของงานเลือกทางนี้)
+- `GET /api/audit-log` เพิ่ม `?scope=all` / `?user_id=` — **ต้องขอข้ามผู้ใช้แบบชัดแจ้ง** default ยังเป็น
+  ของตัวเองแม้เป็นแอดมิน ไม่งั้นหน้า `/audit` ส่วนตัวของแอดมินจะกลายเป็นมุมมองรวมทุกคนแบบเงียบ ๆ
+  · `scope` ค่าอื่น = 400 · คนทั่วไปขอของคนอื่น = 403 (ไม่ใช่ผลว่าง) · join `app_user` คืน email/ชื่อ
+- หน้าแอดมินเป็น**แท็บที่สามในหน้าตั้งค่า** ใช้ `AuditLog.tsx` ตัวเดิมผ่าน prop `variant="admin"`
+  ไม่สร้างหน้าใหม่ · เพิ่มการกดขยายดู before/after + IP และตัวกรองช่วงวันที่ (API รองรับอยู่แล้วแต่ UI ไม่มี)
+- **invariant ที่ต้องรักษา**: ทุก call site เลือกคอลัมน์ปลอดภัยเอง ห้าม `select *` บนตารางที่มีความลับ —
+  `ACCOUNT_AUDIT_COLUMNS` (`routes/accounts.ts`), `SAFE_COLUMNS` (`routes/tax-entities.ts`),
+  `TAX_DOC_COLUMNS` · รหัสผ่าน PDF/เลขผู้เสียภาษีเก็บเป็น boolean "เปลี่ยนหรือไม่" ไม่เก็บค่า
+  (คลาสเดียวกับบั๊ก `pdf_password_enc` รั่วที่เจอใน Slice 8) — `test/authz.test.ts` ข้อ 44 คุมไว้แล้ว
+- `ponytail:` ในหัว `routes/audit-log.ts`: ไม่มีการลบข้อมูลเก่า ตารางโตไปเรื่อย ๆ ทางอัปเกรดคือ
+  `delete ... where created_at < now() - interval '2 years'` ใน worker เดือนละครั้ง — ยังไม่ทำเป็น cron
+- **ไม่ทำ**: HTTP request log ต่อ request ลง Postgres (ขัดกับ "เบาที่สุด" และซ้ำกับ `audit()` — stdout พอ)
+
+**การตรวจสอบ**
+
+- `npm run test:db` — เพิ่ม `test/authz.test.ts` ข้อ 42–44 และ `test/guides.test.ts` (4 เทสต์, pure)
+  · `npm run build` สะอาด
+- **`test/kbank-parser.test.ts` แถวลบบรรทัด "ยอดยกมา" ทิ้งแล้วคาดว่า `checksumValid=false` fail อยู่**
+  บน `origin/master` **ก่อน**งานนี้ — ไม่ได้แตะ `src/parsers/` เลย ยังไม่แก้ (คนละเรื่อง)
+- **ยังไม่เคยเปิดดูในเบราว์เซอร์จริง** เหมือนทุกเฟสก่อนหน้า — เรื่องที่ต้องใช้ตาคนดูมากที่สุดคือ tour:
+  tsc/vite ยืนยันว่า compile ผ่าน แต่ไม่ยืนยันว่ากรอบไฮไลต์ตกที่ถูกตัว การ์ดไม่ล้นจอ 320px หรือ focus
+  กลับถูกที่ (`test/guides.test.ts` ยืนยันได้แค่ว่า selector ยังมีอยู่จริงใน source)
+
 ## UI design guideline — ปิดแล้ว
 
 `docs/plans/personalfinancesystemplan.md` §3 (light mode, สีแดง crimson, ฟอนต์พิกเซล, Lucide icons)
