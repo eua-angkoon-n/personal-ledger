@@ -10,6 +10,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TableRow,
   TextField,
@@ -305,6 +306,7 @@ export default function StudentLoan() {
 
           <ToggleButtonGroup
             exclusive
+            sx={{ flexWrap: 'wrap' }}
             value={scenario}
             onChange={(_, v: StudentLoanScenario | null) => v && setScenario(v)}
             aria-label="เลือกแผนที่จะดูรายละเอียด"
@@ -354,12 +356,14 @@ export default function StudentLoan() {
             />
           </Box>
 
-          <Paper variant="outlined" sx={{ p: 3 }}>
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
             <Typography variant="h2" sx={{ fontSize: '1.25rem', mb: 1 }}>เทียบสามทางเลือก</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               ตัวเลขชุดเดียวกัน ต่างกันแค่ว่าเอาเงินที่เก็บได้ไปทำอะไร
             </Typography>
-            <Table size="small">
+            {/* tabIndex ให้คีย์บอร์ดเลื่อนตารางที่กว้างเกินจอได้ เหมือน TransactionTable/Installments */}
+            <TableContainer tabIndex={0}>
+            <Table size="small" aria-label="เทียบสามทางเลือกในการปลดหนี้" sx={{ minWidth: 620 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>ทางเลือก</TableCell>
@@ -391,9 +395,10 @@ export default function StudentLoan() {
                 })}
               </TableBody>
             </Table>
+            </TableContainer>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 3 }}>
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
             <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', mb: 1 }}>
               <Typography variant="h2" sx={{ fontSize: '1.25rem' }}>ลองปรับตัวเลขดู</Typography>
               {/* หน้าไม่ถูกล้างเป็น skeleton ระหว่างคำนวณใหม่แล้ว จึงต้องมีอะไรบอกว่ากำลังทำงานอยู่ */}
@@ -422,12 +427,13 @@ export default function StudentLoan() {
             </Stack>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 3 }}>
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
             <Typography variant="h2" sx={{ fontSize: '1.25rem', mb: 1 }}>ตารางงวดรายปี</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               เงินต้นแต่ละงวดคิดเป็น % ของยอดกู้ตามสัญญา และเพิ่มขึ้นทุกปี — ขั้นต่ำต่อเดือนจึงไม่ใช่ตัวเลขคงที่
             </Typography>
-            <Table size="small">
+            <TableContainer tabIndex={0}>
+            <Table size="small" aria-label="ตารางงวดรายปีตามตาราง Step Up" sx={{ minWidth: 720 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>งวดที่</TableCell>
@@ -454,9 +460,10 @@ export default function StudentLoan() {
                 ))}
               </TableBody>
             </Table>
+            </TableContainer>
           </Paper>
 
-          <Paper variant="outlined" sx={{ p: 3 }}>
+          <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
             <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
               <Typography variant="h2" sx={{ fontSize: '1.25rem' }}>
                 ตารางรายเดือน ({projection.monthly.length} เดือน)
@@ -464,7 +471,8 @@ export default function StudentLoan() {
               <Button onClick={() => setShowMonthly((v) => !v)}>{showMonthly ? 'ซ่อน' : 'ดูทั้งหมด'}</Button>
             </Stack>
             {showMonthly && (
-              <Table size="small">
+              <TableContainer tabIndex={0}>
+              <Table size="small" aria-label="ตารางรายเดือนจนถึงวันปิดหนี้" sx={{ minWidth: 720 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>วันที่</TableCell>
@@ -488,6 +496,7 @@ export default function StudentLoan() {
                   ))}
                 </TableBody>
               </Table>
+              </TableContainer>
             )}
           </Paper>
         </Stack>
